@@ -1,0 +1,13 @@
+{
+  "siliconflow": {
+    "api_url": "https://api.siliconflow.cn/v1/audio/speech",
+    "api_key": "",
+    "default_model": "FunAudioLLM/CosyVoice2-0.5B",
+    "default_voice": "FunAudioLLM/CosyVoice2-0.5B:anna",
+    "sample_rate": 32000,
+    "response_format": "mp3",
+    "stream": true,
+    "speed": 1,
+    "gain": 0
+  }
+}

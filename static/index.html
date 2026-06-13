@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>claude-voice</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f4f0;
+      --panel: #fffaf5;
+      --ink: #241f22;
+      --muted: #71676c;
+      --line: #e7d8d2;
+      --user: #244c5a;
+      --assistant: #8a2f54;
+      --accent: #d95f84;
+      --accent-2: #2f7a72;
+      --shadow: 0 18px 45px rgba(36, 31, 34, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      background:
+        linear-gradient(135deg, rgba(217, 95, 132, 0.16), transparent 42%),
+        linear-gradient(315deg, rgba(47, 122, 114, 0.14), transparent 46%),
+        var(--bg);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .app {
+      width: min(780px, 100%);
+      height: min(820px, calc(100vh - 48px));
+      min-height: 520px;
+      background: rgba(255, 250, 245, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+      backdrop-filter: blur(18px);
+    }
+
+    header,
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-color: var(--line);
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+    }
+
+    footer {
+      border-top: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 128px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #b7b0b3;
+      box-shadow: 0 0 0 4px rgba(183, 176, 179, 0.18);
+    }
+
+    .status[data-status="listening"] .dot {
+      background: #d94141;
+      box-shadow: 0 0 0 4px rgba(217, 65, 65, 0.16);
+    }
+
+    .status[data-status="thinking"] .dot {
+      background: #d7a11d;
+      box-shadow: 0 0 0 4px rgba(215, 161, 29, 0.18);
+    }
+
+    .status[data-status="speaking"] .dot {
+      background: #2f9b72;
+      box-shadow: 0 0 0 4px rgba(47, 155, 114, 0.18);
+    }
+
+    .messages {
+      overflow: auto;
+      padding: 18px 16px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scroll-behavior: smooth;
+    }
+
+    .empty {
+      margin: auto;
+      color: var(--muted);
+      text-align: center;
+      font-size: 15px;
+    }
+
+    .bubble {
+      max-width: min(620px, 92%);
+      border-radius: 8px;
+      padding: 11px 13px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid transparent;
+    }
+
+    .bubble.user {
+      align-self: flex-end;
+      background: rgba(36, 76, 90, 0.1);
+      border-color: rgba(36, 76, 90, 0.22);
+    }
+
+    .bubble.assistant {
+      align-self: flex-start;
+      background: rgba(138, 47, 84, 0.1);
+      border-color: rgba(138, 47, 84, 0.2);
+    }
+
+    .speaker {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .footer-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .mic-info {
+      color: var(--muted);
+      font-size: 13px;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .meter-info {
+      color: var(--muted);
+      font-size: 13px;
+      min-width: 168px;
+    }
+
+    .meter-info.active {
+      color: var(--accent-2);
+      font-weight: 700;
+    }
+
+    button {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--ink);
+      padding: 0 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: rgba(217, 95, 132, 0.55);
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      min-width: 132px;
+    }
+
+    button.ptt {
+      background: var(--accent-2);
+      border-color: var(--accent-2);
+      color: white;
+      min-width: 142px;
+    }
+
+    button.ptt.recording {
+      filter: brightness(0.9);
+      transform: translateY(1px);
+    }
+
+    @media (max-width: 560px) {
+      body {
+        padding: 0;
+      }
+
+      .app {
+        height: 100vh;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+      }
+
+      header,
+      footer {
+        padding: 12px;
+      }
+
+      .status,
+      .footer-info,
+      .mic-info,
+      .meter-info,
+      .controls {
+        width: 100%;
+      }
+
+      .mic-info {
+        max-width: none;
+      }
+
+      .controls button {
+        flex: 1 1 auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>claude-voice</h1>
+      <div class="status" data-status="idle">
+        <span class="dot"></span>
+        <span id="statusText">空闲</span>
+      </div>
+    </header>
+
+    <section id="messages" class="messages" aria-live="polite">
+      <div class="empty" id="empty">Speak and Claude will answer. Your voice, its words.</div>
+    </section>
+
+    <footer>
+      <div class="footer-info">
+        <div class="status" data-status="idle" id="connection">
+          <span class="dot"></span>
+          <span id="connectionText">连接中</span>
+        </div>
+        <div class="mic-info" id="micInfo" title="当前麦克风">麦克风：检测中</div>
+        <div class="meter-info" id="meterInfo">收音：等待中</div>
+      </div>
+      <div class="controls">
+        <button id="modeBtn" class="primary" type="button">免提模式</button>
+        <button id="ttsBtn" type="button">系统语音</button>
+        <button id="refreshMicBtn" type="button">重连麦克风</button>
+        <button id="pttBtn" class="ptt" type="button">按住说话</button>
+        <button id="listenBtn" type="button">暂停监听</button>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    if (location.protocol === "file:") {
+      location.replace("http://localhost:12394/");
+    }
+
+    const messages = document.querySelector("#messages");
+    const empty = document.querySelector("#empty");
+    const statusBox = document.querySelector("header .status");
+    const statusText = document.querySelector("#statusText");
+    const connection = document.querySelector("#connection");
+    const connectionText = document.querySelector("#connectionText");
+    const modeBtn = document.querySelector("#modeBtn");
+    const ttsBtn = document.querySelector("#ttsBtn");
+    const refreshMicBtn = document.querySelector("#refreshMicBtn");
+    const pttBtn = document.querySelector("#pttBtn");
+    const listenBtn = document.querySelector("#listenBtn");
+    const micInfo = document.querySelector("#micInfo");
+    const meterInfo = document.querySelector("#meterInfo");
+
+    let ws;
+    let mode = "handsfree";
+    let ttsProvider = "say";
+    let listening = true;
+    let assistantBubble;
+    let pttDown = false;
+
+    const statusLabels = {
+      idle: "空闲",
+      listening: "监听中",
+      thinking: "思考中",
+      speaking: "播放中",
+    };
+
+    function connect() {
+      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+      ws.addEventListener("open", () => {
+        connection.dataset.status = "speaking";
+        connectionText.textContent = "已连接";
+      });
+      ws.addEventListener("close", () => {
+        connection.dataset.status = "idle";
+        connectionText.textContent = "重连中";
+        setTimeout(connect, 900);
+      });
+      ws.addEventListener("message", (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "status") setStatus(msg.status);
+        if (msg.type === "mode") setMode(msg.mode, false);
+        if (msg.type === "tts_provider") setTtsProvider(msg.provider, false);
+        if (msg.type === "audio_input") setAudioInput(msg);
+        if (msg.type === "audio_meter") setAudioMeter(msg);
+        if (msg.type === "user_msg") addBubble("user", "You", msg.text);
+        if (msg.type === "assistant_token") appendAssistant(msg.text);
+        if (msg.type === "assistant_done") finishAssistant(msg.text);
+      });
+    }
+
+    function send(payload) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      }
+    }
+
+    function setStatus(status) {
+      statusBox.dataset.status = status;
+      statusText.textContent = statusLabels[status] || status;
+      listenBtn.textContent = mode === "ptt" ? "按住按钮说话" : (status === "idle" ? "开始监听" : "暂停监听");
+      listening = status !== "idle";
+    }
+
+    function setMode(nextMode, notify = true) {
+      mode = nextMode;
+      modeBtn.textContent = mode === "handsfree" ? "免提模式" : "按讲模式";
+      pttBtn.disabled = mode !== "ptt";
+      listenBtn.disabled = mode === "ptt";
+      listenBtn.textContent = mode === "ptt" ? "按住按钮说话" : (listening ? "暂停监听" : "开始监听");
+      if (notify) send({ type: "switch_mode", mode });
+    }
+
+    function setTtsProvider(provider, notify = true) {
+      ttsProvider = provider === "siliconflow" ? "siliconflow" : "say";
+      ttsBtn.textContent = ttsProvider === "siliconflow" ? "硅基语音" : "系统语音";
+      if (notify) send({ type: "switch_tts", provider: ttsProvider });
+    }
+
+    function setAudioInput(input) {
+      const name = input.name || "未知";
+      const rate = input.sample_rate ? `${input.sample_rate}Hz` : "";
+      const target = input.target_sample_rate && input.target_sample_rate !== input.sample_rate
+        ? ` → ${input.target_sample_rate}Hz`
+        : "";
+      const text = `麦克风：${name}${rate ? ` (${rate}${target})` : ""}`;
+      micInfo.textContent = text;
+      micInfo.title = text;
+    }
+
+    function setAudioMeter(meter) {
+      const db = Number.isFinite(meter.db) ? `${meter.db.toFixed(1)} dB` : "-- dB";
+      const prob = Number.isFinite(meter.prob) ? `${Math.round(meter.prob * 100)}%` : "--%";
+      meterInfo.textContent = meter.speech
+        ? `检测到语音：${db} / ${prob}`
+        : `收音：${db} / 语音 ${prob}`;
+      meterInfo.classList.toggle("active", Boolean(meter.speech));
+      meterInfo.title = `阈值：${meter.db_threshold} dB / ${Math.round(meter.prob_threshold * 100)}%`;
+    }
+
+    function addBubble(kind, speaker, text) {
+      empty?.remove();
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${kind}`;
+      bubble.innerHTML = `<span class="speaker"></span><span class="body"></span>`;
+      bubble.querySelector(".speaker").textContent = speaker;
+      bubble.querySelector(".body").textContent = text;
+      messages.appendChild(bubble);
+      messages.scrollTop = messages.scrollHeight;
+      return bubble;
+    }
+
+    function appendAssistant(text) {
+      if (!text) return;
+      if (!assistantBubble) {
+        assistantBubble = addBubble("assistant", "Claude", "");
+      }
+      const body = assistantBubble.querySelector(".body");
+      body.textContent += text;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function finishAssistant(text) {
+      if (!assistantBubble && !text) return;
+      if (!assistantBubble) {
+        assistantBubble = addBubble("assistant", "Claude", text || "");
+      } else if (text && !assistantBubble.querySelector(".body").textContent.trim()) {
+        assistantBubble.querySelector(".body").textContent = text;
+      }
+      assistantBubble = null;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    modeBtn.addEventListener("click", () => {
+      setMode(mode === "handsfree" ? "ptt" : "handsfree");
+    });
+
+    ttsBtn.addEventListener("click", () => {
+      setTtsProvider(ttsProvider === "say" ? "siliconflow" : "say");
+    });
+
+    refreshMicBtn.addEventListener("click", () => {
+      send({ type: "refresh_audio_input" });
+    });
+
+    listenBtn.addEventListener("click", () => {
+      if (mode === "ptt") return;
+      send({ type: listening ? "stop_listening" : "start_listening" });
+    });
+
+    function pttStart() {
+      if (mode !== "ptt" || pttDown) return;
+      pttDown = true;
+      pttBtn.classList.add("recording");
+      send({ type: "push_to_talk_start" });
+    }
+
+    function pttEnd() {
+      if (!pttDown) return;
+      pttDown = false;
+      pttBtn.classList.remove("recording");
+      send({ type: "push_to_talk_end" });
+    }
+
+    pttBtn.addEventListener("pointerdown", pttStart);
+    window.addEventListener("pointerup", pttEnd);
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "Space" && mode === "ptt" && !event.repeat) {
+        event.preventDefault();
+        pttStart();
+      }
+    });
+    window.addEventListener("keyup", (event) => {
+      if (event.code === "Space" && mode === "ptt") {
+        event.preventDefault();
+        pttEnd();
+      }
+    });
+
+    setMode("handsfree", false);
+    connect();
+  </script>
+</body>
+</html>

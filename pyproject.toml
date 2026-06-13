@@ -1,0 +1,17 @@
+[project]
+name = "claude-voice"
+version = "0.1.0"
+description = "Voice I/O frontend for Claude Code — hear and speak without touching the API."
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "numpy>=1.24",
+    "onnxruntime==1.24.4",
+    "sherpa-onnx>=1.10",
+    "silero-vad>=0.1",
+    "sounddevice>=0.5",
+    "torch>=2.0",
+]
+
+[tool.uv]
+package = false
