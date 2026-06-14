@@ -311,6 +311,7 @@
           <option value="siliconflow_moss">硅基 MOSS</option>
           <option value="bailian">阿里百炼</option>
         </select>
+        <button id="newConversationBtn" type="button">新对话</button>
         <button id="refreshMicBtn" type="button">重连麦克风</button>
         <button id="pttBtn" class="ptt" type="button">按住说话</button>
         <button id="listenBtn" type="button" disabled>按住按钮说话</button>
@@ -331,6 +332,7 @@
     const connectionText = document.querySelector("#connectionText");
     const modeBtn = document.querySelector("#modeBtn");
     const ttsSelect = document.querySelector("#ttsSelect");
+    const newConversationBtn = document.querySelector("#newConversationBtn");
     const refreshMicBtn = document.querySelector("#refreshMicBtn");
     const pttBtn = document.querySelector("#pttBtn");
     const listenBtn = document.querySelector("#listenBtn");
@@ -370,6 +372,7 @@
         if (msg.type === "tts_provider") setTtsProvider(msg.provider, false);
         if (msg.type === "audio_input") setAudioInput(msg);
         if (msg.type === "audio_meter") setAudioMeter(msg);
+        if (msg.type === "conversation_reset") clearConversation();
         if (msg.type === "user_msg") addBubble("user", "You", msg.text);
         if (msg.type === "assistant_token") appendAssistant(msg.text);
         if (msg.type === "assistant_done") finishAssistant(msg.text);
@@ -425,6 +428,12 @@
       meterInfo.title = `阈值：${meter.db_threshold} dB / ${Math.round(meter.prob_threshold * 100)}%`;
     }
 
+    function clearConversation() {
+      assistantBubble = null;
+      messages.replaceChildren(empty);
+      messages.scrollTop = 0;
+    }
+
     function addBubble(kind, speaker, text) {
       empty?.remove();
       const bubble = document.createElement("div");
@@ -464,6 +473,11 @@
 
     ttsSelect.addEventListener("change", () => {
       setTtsProvider(ttsSelect.value);
+    });
+
+    newConversationBtn.addEventListener("click", () => {
+      clearConversation();
+      send({ type: "new_conversation" });
     });
 
     refreshMicBtn.addEventListener("click", () => {

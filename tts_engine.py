@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
+import queue
 import subprocess
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import aiohttp
+import sounddevice as sd
 
 import config
 from tts_text import normalize_for_tts
@@ -36,6 +40,9 @@ class TTSEngine:
         text = normalize_for_tts(text)
         if not text:
             return
+        text = text.strip()
+        if not text:
+            return
         cloud_tts = self._cloud_tts()
         if cloud_tts is not None:
             ok = await cloud_tts.speak(text)
@@ -45,10 +52,15 @@ class TTSEngine:
 
     def can_prefetch(self) -> bool:
         cloud_tts = self._cloud_tts()
+        if hasattr(cloud_tts, "can_prefetch"):
+            return bool(cloud_tts.can_prefetch())
         return cloud_tts is not None and cloud_tts.configured
 
     async def prepare(self, text: str) -> Optional[PreparedSpeech]:
         text = normalize_for_tts(text)
+        if not text:
+            return None
+        text = text.strip()
         if not text:
             return None
         cloud_tts = self._cloud_tts()
@@ -260,6 +272,8 @@ class BailianTTS:
         self,
         api_key: str,
         websocket_api_url: str,
+        http_api_url: str,
+        qwen_realtime_websocket_api_url: str,
         model: str,
         voice: str,
         audio_format: str,
@@ -270,6 +284,8 @@ class BailianTTS:
         self.provider = "bailian"
         self.api_key = api_key
         self.websocket_api_url = websocket_api_url
+        self.http_api_url = http_api_url
+        self.qwen_realtime_websocket_api_url = qwen_realtime_websocket_api_url
         self.model = model
         self.voice = voice
         self.audio_format = audio_format
@@ -277,6 +293,10 @@ class BailianTTS:
         self.volume = volume
         self.pitch_rate = pitch_rate
         self._proc: Optional[subprocess.Popen[str]] = None
+        self._active_synth = None
+        self._active_stream: Optional[sd.RawOutputStream] = None
+        self._stop_requested = threading.Event()
+        self._dashscope_configured = False
 
     @property
     def configured(self) -> bool:
@@ -291,6 +311,11 @@ class BailianTTS:
         return cls(
             api_key=os.environ.get(config.BAILIAN_API_KEY_ENV, bailian_config.get("api_key", "")),
             websocket_api_url=bailian_config.get("websocket_api_url", config.BAILIAN_WEBSOCKET_API_URL),
+            http_api_url=bailian_config.get("http_api_url", config.BAILIAN_HTTP_API_URL),
+            qwen_realtime_websocket_api_url=bailian_config.get(
+                "qwen_realtime_websocket_api_url",
+                config.BAILIAN_QWEN_REALTIME_WEBSOCKET_API_URL,
+            ),
             model=bailian_config.get("model", config.BAILIAN_DEFAULT_MODEL),
             voice=bailian_config.get("voice", config.BAILIAN_DEFAULT_VOICE),
             audio_format=bailian_config.get("audio_format", config.BAILIAN_AUDIO_FORMAT),
@@ -299,16 +324,73 @@ class BailianTTS:
             pitch_rate=float(bailian_config.get("pitch_rate", config.BAILIAN_PITCH_RATE)),
         )
 
+    def _ensure_dashscope(self) -> None:
+        if self._dashscope_configured:
+            return
+        import dashscope
+
+        dashscope.api_key = self.api_key
+        dashscope.base_websocket_api_url = self.websocket_api_url
+        dashscope.base_http_api_url = self.http_api_url
+        self._dashscope_configured = True
+
+    def _create_synthesizer(self, callback=None):
+        self._ensure_dashscope()
+        from dashscope.audio.tts_v2 import SpeechSynthesizer
+
+        return SpeechSynthesizer(
+            model=self.model,
+            voice=self.voice,
+            format=_bailian_audio_format(self.audio_format),
+            volume=self.volume,
+            speech_rate=self.speech_rate,
+            pitch_rate=self.pitch_rate,
+            callback=callback,
+        )
+
+    def stop(self) -> None:
+        self._stop_requested.set()
+        synth = self._active_synth
+        if synth is not None:
+            with contextlib.suppress(Exception):
+                synth.streaming_cancel()
+            with contextlib.suppress(Exception):
+                synth.close()
+            self._active_synth = None
+        stream = self._active_stream
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                stream.stop()
+            with contextlib.suppress(Exception):
+                stream.close()
+            self._active_stream = None
+        _stop_proc(self._proc)
+        self._proc = None
+
     async def speak(self, text: str) -> bool:
-        prepared = await self.prepare(text)
-        if prepared is None:
+        if not self.configured:
             return False
-        return await self.play_prepared(prepared)
+        text = text.strip()
+        if not text:
+            return False
+        self._stop_requested.clear()
+        if _is_qwen_realtime_model(self.model):
+            return await asyncio.to_thread(self._stream_qwen_realtime_to_speaker, text)
+        if _is_qwen_http_model(self.model):
+            prepared = await self.prepare(text)
+            if prepared is None:
+                return False
+            return await self.play_prepared(prepared)
+        return await asyncio.to_thread(self._stream_to_speaker, text)
 
     async def prepare(self, text: str) -> Optional[PreparedSpeech]:
-        if not self.configured:
+        if not self.configured or not _is_qwen_http_model(self.model):
             return None
-        audio_path = await asyncio.to_thread(self._generate_audio, text)
+        text = text.strip()
+        if not text:
+            return None
+        self._stop_requested.clear()
+        audio_path = await asyncio.to_thread(self._generate_qwen_http_audio, text)
         if audio_path is None:
             return None
         return PreparedSpeech(provider=self.provider, text=text, audio_path=audio_path)
@@ -323,41 +405,287 @@ class BailianTTS:
             with contextlib.suppress(FileNotFoundError):
                 prepared.audio_path.unlink()
 
-    def stop(self) -> None:
-        _stop_proc(self._proc)
-        self._proc = None
+    def can_prefetch(self) -> bool:
+        return self.configured and _is_qwen_http_model(self.model)
 
-    def _generate_audio(self, text: str) -> Optional[Path]:
+    def _generate_qwen_http_audio(self, text: str) -> Optional[Path]:
+        self._ensure_dashscope()
+        from dashscope.audio.qwen_tts import SpeechSynthesizer
+
+        path = Path(tempfile.gettempdir()) / f"claude-voice-bailian-{uuid.uuid4().hex}.wav"
         try:
-            import dashscope
-            from dashscope.audio.tts_v2 import SpeechSynthesizer
-
-            dashscope.api_key = self.api_key
-            dashscope.base_websocket_api_url = self.websocket_api_url
-            synthesizer = SpeechSynthesizer(
+            chunks = SpeechSynthesizer.call(
                 model=self.model,
+                text=text,
+                api_key=self.api_key,
                 voice=self.voice,
-                format=_bailian_audio_format(self.audio_format),
-                volume=self.volume,
-                speech_rate=self.speech_rate,
-                pitch_rate=self.pitch_rate,
+                language_type="Chinese",
+                stream=True,
             )
-            audio = synthesizer.call(text)
-            if not audio:
-                print(f"bailian tts failed: empty audio: {synthesizer.get_response()}")
+            wrote_audio = False
+            with path.open("wb") as file:
+                for response in chunks:
+                    if self._stop_requested.is_set():
+                        return None
+                    status_code = getattr(response, "status_code", None)
+                    code = getattr(response, "code", "")
+                    if status_code is not None and int(status_code) >= 400:
+                        print(f"bailian qwen tts failed: http {status_code}: {getattr(response, 'message', '')}")
+                        return None
+                    if code:
+                        print(f"bailian qwen tts failed: {code}: {getattr(response, 'message', '')}")
+                        return None
+                    data = _qwen_response_audio_data(response)
+                    if not data:
+                        continue
+                    file.write(base64.b64decode(data))
+                    wrote_audio = True
+            if not wrote_audio:
+                print("bailian qwen tts failed: empty audio")
                 return None
-            path = Path(tempfile.gettempdir()) / f"claude-voice-bailian-{uuid.uuid4().hex}.mp3"
-            path.write_bytes(audio)
+            if self._stop_requested.is_set():
+                return None
             return path
         except Exception as exc:
-            print(f"bailian tts failed: {type(exc).__name__}: {exc}")
+            print(f"bailian qwen tts failed: {type(exc).__name__}: {exc}")
             return None
+        finally:
+            if self._stop_requested.is_set():
+                with contextlib.suppress(FileNotFoundError):
+                    path.unlink()
 
     def _play_audio(self, audio_path: Path) -> None:
+        if self._stop_requested.is_set():
+            return
         self._proc = subprocess.Popen(["afplay", str(audio_path)])
         self._proc.wait()
         self._proc = None
 
+    def _speak_qwen_http(self, text: str) -> bool:
+        prepared = self._generate_qwen_http_audio(text)
+        if prepared is None:
+            return False
+        try:
+            self._play_audio(prepared)
+            return not self._stop_requested.is_set()
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                prepared.unlink()
+
+    def _stream_qwen_realtime_to_speaker(self, text: str) -> bool:
+        self._ensure_dashscope()
+        from dashscope.audio.qwen_tts_realtime import AudioFormat, QwenTtsRealtime, QwenTtsRealtimeCallback
+
+        stream: Optional[sd.RawOutputStream] = None
+        opened = False
+        error: Optional[str] = None
+        audio_queue: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=config.BAILIAN_AUDIO_QUEUE_MAX_CHUNKS)
+        stop_playback = threading.Event()
+        playback_done = threading.Event()
+        playback_thread: Optional[threading.Thread] = None
+        sample_rate = _bailian_audio_sample_rate(self.audio_format)
+        owner = self
+
+        def set_error(message: str) -> None:
+            nonlocal error
+            if error is None:
+                error = message
+            stop_playback.set()
+
+        def playback_loop() -> None:
+            nonlocal stream, opened
+            try:
+                stream = sd.RawOutputStream(
+                    samplerate=sample_rate,
+                    channels=1,
+                    dtype="int16",
+                )
+                stream.start()
+                owner._active_stream = stream
+                opened = True
+                while not stop_playback.is_set():
+                    data = audio_queue.get()
+                    if data is None:
+                        return
+                    stream.write(data)
+            except Exception as exc:
+                set_error(f"{type(exc).__name__}: {exc}")
+            finally:
+                if stream is not None:
+                    with contextlib.suppress(Exception):
+                        stream.stop()
+                    with contextlib.suppress(Exception):
+                        stream.close()
+                if owner._active_stream is stream:
+                    owner._active_stream = None
+                playback_done.set()
+
+        class Callback(QwenTtsRealtimeCallback):
+            def on_open(self) -> None:
+                pass
+
+            def on_event(self, message) -> None:
+                try:
+                    event = json.loads(message) if isinstance(message, str) else message
+                    event_type = event.get("type")
+                    if event_type == "response.audio.delta":
+                        data = base64.b64decode(event.get("delta", ""))
+                        if data:
+                            audio_queue.put(data, timeout=1.0)
+                    elif event_type == "error" or event.get("error"):
+                        set_error(str(event.get("error", event)))
+                except queue.Full:
+                    set_error("audio playback queue full")
+                except Exception as exc:
+                    set_error(f"{type(exc).__name__}: {exc}")
+
+            def on_close(self, close_status_code, close_msg) -> None:
+                pass
+
+        callback = Callback()
+        realtime = None
+        try:
+            playback_thread = threading.Thread(target=playback_loop, daemon=True)
+            playback_thread.start()
+            realtime = QwenTtsRealtime(
+                model=self.model,
+                callback=callback,
+                url=self.qwen_realtime_websocket_api_url,
+            )
+            self._active_synth = realtime
+            realtime.connect()
+            realtime.update_session(
+                voice=self.voice,
+                response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+                sample_rate=sample_rate,
+                volume=self.volume,
+                speech_rate=self.speech_rate,
+                pitch_rate=self.pitch_rate,
+                mode="server_commit",
+            )
+            realtime.append_text(text)
+            realtime.finish()
+            if error:
+                print(f"bailian qwen realtime tts failed: {error}")
+                return False
+            return opened
+        except Exception as exc:
+            print(f"bailian qwen realtime tts failed: {type(exc).__name__}: {exc}")
+            return False
+        finally:
+            self._active_synth = None
+            if realtime is not None:
+                with contextlib.suppress(Exception):
+                    realtime.close()
+            if error is not None:
+                stop_playback.set()
+            if playback_thread is not None:
+                try:
+                    audio_queue.put(None, timeout=1.0)
+                except queue.Full:
+                    stop_playback.set()
+                playback_done.wait(timeout=5.0)
+
+    def _stream_to_speaker(self, text: str) -> bool:
+        stream: Optional[sd.RawOutputStream] = None
+        opened = False
+        error: Optional[str] = None
+        audio_queue: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=config.BAILIAN_AUDIO_QUEUE_MAX_CHUNKS)
+        stop_playback = threading.Event()
+        playback_done = threading.Event()
+        playback_thread: Optional[threading.Thread] = None
+        sample_rate = _bailian_audio_sample_rate(self.audio_format)
+
+        from dashscope.audio.tts_v2 import ResultCallback
+
+        owner = self
+
+        def set_error(message: str) -> None:
+            nonlocal error
+            if error is None:
+                error = message
+            stop_playback.set()
+
+        def playback_loop() -> None:
+            nonlocal stream, opened
+            try:
+                stream = sd.RawOutputStream(
+                    samplerate=sample_rate,
+                    channels=1,
+                    dtype="int16",
+                )
+                stream.start()
+                owner._active_stream = stream
+                opened = True
+                while not stop_playback.is_set():
+                    data = audio_queue.get()
+                    if data is None:
+                        return
+                    stream.write(data)
+            except Exception as exc:
+                set_error(f"{type(exc).__name__}: {exc}")
+            finally:
+                if stream is not None:
+                    with contextlib.suppress(Exception):
+                        stream.stop()
+                    with contextlib.suppress(Exception):
+                        stream.close()
+                if owner._active_stream is stream:
+                    owner._active_stream = None
+                playback_done.set()
+
+        class Callback(ResultCallback):
+            def on_open(self) -> None:
+                nonlocal playback_thread
+                try:
+                    playback_thread = threading.Thread(target=playback_loop, daemon=True)
+                    playback_thread.start()
+                except Exception as exc:
+                    set_error(f"{type(exc).__name__}: {exc}")
+
+            def on_data(self, data: bytes) -> None:
+                if error is not None or not data:
+                    return
+                try:
+                    audio_queue.put(data, timeout=1.0)
+                except queue.Full:
+                    set_error("audio playback queue full")
+                except Exception as exc:
+                    set_error(f"{type(exc).__name__}: {exc}")
+
+            def on_error(self, message) -> None:
+                set_error(str(message))
+
+            def on_close(self) -> None:
+                pass
+
+        callback = Callback()
+        synth = None
+        try:
+            synth = self._create_synthesizer(callback=callback)
+            self._active_synth = synth
+            synth.streaming_call(text)
+            synth.streaming_complete(config.BAILIAN_CALL_TIMEOUT_MS)
+            if error:
+                print(f"bailian tts failed: {error}")
+                return False
+            return opened
+        except Exception as exc:
+            print(f"bailian tts failed: {type(exc).__name__}: {exc}")
+            if synth is not None:
+                with contextlib.suppress(Exception):
+                    synth.close()
+            return False
+        finally:
+            self._active_synth = None
+            if error is not None:
+                stop_playback.set()
+            if playback_thread is not None:
+                try:
+                    audio_queue.put(None, timeout=1.0)
+                except queue.Full:
+                    stop_playback.set()
+                playback_done.wait(timeout=5.0)
 
 def _stop_proc(proc: Optional[subprocess.Popen[str]]) -> None:
     if proc is None or proc.poll() is not None:
@@ -399,6 +727,26 @@ def _normalize_moss_voice(voice: str, model: str) -> str:
     return f"{model}:{voice}"
 
 
+def _is_qwen_http_model(model: str) -> bool:
+    normalized = str(model).strip().lower()
+    return normalized.startswith(("qwen-tts", "qwen3-tts")) and "realtime" not in normalized
+
+
+def _is_qwen_realtime_model(model: str) -> bool:
+    normalized = str(model).strip().lower()
+    return normalized.startswith(("qwen-tts", "qwen3-tts")) and "realtime" in normalized
+
+
+def _qwen_response_audio_data(response) -> str:
+    output = getattr(response, "output", None)
+    audio = getattr(output, "audio", None) if output is not None else None
+    if isinstance(audio, dict):
+        return str(audio.get("data") or "")
+    if audio is not None and hasattr(audio, "data"):
+        return str(getattr(audio, "data") or "")
+    return ""
+
+
 def _bailian_audio_format(name: str):
     from dashscope.audio.tts_v2 import AudioFormat
 
@@ -410,5 +758,24 @@ def _bailian_audio_format(name: str):
         "mp3_24000": AudioFormat.MP3_24000HZ_MONO_256KBPS,
         "mp3_44100": AudioFormat.MP3_44100HZ_MONO_256KBPS,
         "mp3_48000": AudioFormat.MP3_48000HZ_MONO_256KBPS,
+        "pcm": AudioFormat.PCM_24000HZ_MONO_16BIT,
+        "pcm_16000": AudioFormat.PCM_16000HZ_MONO_16BIT,
+        "pcm_22050": AudioFormat.PCM_22050HZ_MONO_16BIT,
+        "pcm_24000": AudioFormat.PCM_24000HZ_MONO_16BIT,
+        "pcm_44100": AudioFormat.PCM_44100HZ_MONO_16BIT,
+        "pcm_48000": AudioFormat.PCM_48000HZ_MONO_16BIT,
     }
-    return mapping.get(normalized, AudioFormat.MP3_22050HZ_MONO_256KBPS)
+    return mapping.get(normalized, AudioFormat.PCM_24000HZ_MONO_16BIT)
+
+
+def _bailian_audio_sample_rate(name: str) -> int:
+    normalized = str(name).strip().lower()
+    if "16000" in normalized:
+        return 16000
+    if "22050" in normalized:
+        return 22050
+    if "44100" in normalized:
+        return 44100
+    if "48000" in normalized:
+        return 48000
+    return 24000

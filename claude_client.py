@@ -64,12 +64,13 @@ class ClaudeClient:
         self,
         on_token: Optional[TokenCallback],
     ) -> tuple[str, list[concurrent.futures.Future]]:
-        assert self.proc is not None and self.proc.stdout is not None
+        proc = self.proc
+        assert proc is not None and proc.stdout is not None
         chunks: list[str] = []
         token_futures: list[concurrent.futures.Future] = []
         loop = _get_running_loop()
 
-        for line in self.proc.stdout:
+        for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue

@@ -22,10 +22,12 @@
   "bailian": {
     "api_key": "",
     "websocket_api_url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-    "model": "cosyvoice-v3-flash",
-    "voice": "longanli_v3",
-    "audio_format": "mp3",
-    "speech_rate": 1.0,
+    "qwen_realtime_websocket_api_url": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    "http_api_url": "https://dashscope.aliyuncs.com/api/v1",
+    "model": "",
+    "voice": "",
+    "audio_format": "pcm_24000",
+    "speech_rate": 1.1,
     "volume": 50,
     "pitch_rate": 1.0
   }
