@@ -33,8 +33,8 @@ class Status(str, Enum):
 
 
 class StreamingReplySpeaker:
-    END_CHARS = "。！？!?；;\n"
-    SOFT_CHARS = "，、,：: "
+    END_CHARS = "。！？!?"
+    SOFT_CHARS = "，、,"
     BACKTRACK_BREAK_CHARS = "的了是呢吗吧啊呀哦嘛啦喔耶呐么着过和与及"
 
     def __init__(self, app: "MiruVoiceApp") -> None:
@@ -105,16 +105,35 @@ class StreamingReplySpeaker:
             self._drain_prepared(prepared_queue)
 
     async def _prepare_worker(self, prepared_queue: asyncio.Queue[Optional[PreparedSpeech]]) -> None:
+        accum = ""
+        batch_max = config.TTS_BATCH_MAX_CHARS
+        batch_timeout = config.TTS_BATCH_TIMEOUT
         while True:
-            chunk = await self.queue.get()
+            try:
+                chunk = await asyncio.wait_for(self.queue.get(), timeout=batch_timeout)
+            except asyncio.TimeoutError:
+                if accum and self.interrupted_pcm is None:
+                    prepared = await self.app.tts.prepare(accum)
+                    if prepared is not None:
+                        await prepared_queue.put(prepared)
+                    accum = ""
+                continue
             if chunk is None:
+                if accum and self.interrupted_pcm is None:
+                    prepared = await self.app.tts.prepare(accum)
+                    if prepared is not None:
+                        await prepared_queue.put(prepared)
+                    accum = ""
                 await prepared_queue.put(None)
                 return
             if self.interrupted_pcm is not None:
                 continue
-            prepared = await self.app.tts.prepare(chunk)
-            if prepared is not None:
-                await prepared_queue.put(prepared)
+            accum += chunk
+            if len(accum) >= batch_max:
+                prepared = await self.app.tts.prepare(accum)
+                if prepared is not None:
+                    await prepared_queue.put(prepared)
+                accum = ""
 
     def _drain_pending(self) -> None:
         while True:
@@ -148,7 +167,7 @@ class StreamingReplySpeaker:
         if flush:
             return len(self.buffer)
 
-        if self.app.tts.provider == "siliconflow":
+        if self.app.tts.provider in {"siliconflow", "siliconflow_moss", "bailian"}:
             max_chars = config.SILICONFLOW_TTS_CHUNK_MAX_CHARS
             min_chars = config.SILICONFLOW_TTS_CHUNK_MIN_CHARS
         else:
@@ -176,7 +195,7 @@ class MiruVoiceApp:
         self.host = host
         self.port = port
         self.verbose = verbose
-        self.mode = Mode.HANDSFREE
+        self.mode = Mode.PTT
         self.status = Status.IDLE
         self.audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=config.AUDIO_QUEUE_MAX_CHUNKS)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -202,7 +221,8 @@ class MiruVoiceApp:
         processor.add_done_callback(self.report_processor_error)
         self.audio.start()
         await self.server.start(self.host, self.port)
-        await self.set_status(Status.LISTENING)
+        self.audio.stop()
+        await self.set_status(Status.IDLE)
         print(f"claude-voice listening at http://{self.host}:{self.port}")
         await self.closed.wait()
         processor.cancel()
@@ -335,14 +355,16 @@ class MiruVoiceApp:
             self.claude.close()
             self.tts.stop()
             interrupted_pcm = await speaker.finish()
-            await self.server.broadcast({"type": "assistant_done", "text": speaker.displayed_text})
+            error_text = speaker.displayed_text or "Claude 响应超时了，可能是服务正在重试或暂时拥堵。请稍后再说一次。"
+            await self.server.broadcast({"type": "assistant_done", "text": error_text})
             await self.resume_after_turn()
             return interrupted_pcm
         except Exception as exc:
             print(f"claude failed: {type(exc).__name__}: {exc}")
             self.tts.stop()
             interrupted_pcm = await speaker.finish()
-            await self.server.broadcast({"type": "assistant_done", "text": speaker.displayed_text})
+            error_text = speaker.displayed_text or f"Claude 这次没接上：{type(exc).__name__}。请稍后再试一次。"
+            await self.server.broadcast({"type": "assistant_done", "text": error_text})
             await self.resume_after_turn()
             return interrupted_pcm
         await self.server.broadcast({"type": "assistant_done", "text": speaker.displayed_text or reply})

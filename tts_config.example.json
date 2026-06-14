@@ -8,6 +8,25 @@
     "response_format": "mp3",
     "stream": true,
     "speed": 1,
-    "gain": 0
+    "gain": 0,
+    "siliconflow_moss": {
+      "default_model": "fnlp/MOSS-TTSD-v0.5",
+      "default_voice": "fnlp/MOSS-TTSD-v0.5:anna",
+      "sample_rate": 32000,
+      "response_format": "mp3",
+      "stream": true,
+      "speed": 1.1,
+      "gain": 0.0
+    }
+  },
+  "bailian": {
+    "api_key": "",
+    "websocket_api_url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+    "model": "cosyvoice-v3-flash",
+    "voice": "longanli_v3",
+    "audio_format": "mp3",
+    "speech_rate": 1.0,
+    "volume": 50,
+    "pitch_rate": 1.0
   }
 }

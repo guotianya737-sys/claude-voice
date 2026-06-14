@@ -191,7 +191,8 @@
       font-weight: 700;
     }
 
-    button {
+    button,
+    select {
       height: 38px;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -202,7 +203,22 @@
       cursor: pointer;
     }
 
-    button:hover {
+    select {
+      min-width: 126px;
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position:
+        calc(100% - 17px) 50%,
+        calc(100% - 11px) 50%;
+      background-size: 6px 6px, 6px 6px;
+      background-repeat: no-repeat;
+      padding-right: 32px;
+    }
+
+    button:hover,
+    select:hover {
       border-color: rgba(217, 95, 132, 0.55);
     }
 
@@ -257,6 +273,10 @@
       .controls button {
         flex: 1 1 auto;
       }
+
+      .controls select {
+        flex: 1 1 100%;
+      }
     }
   </style>
 </head>
@@ -284,11 +304,16 @@
         <div class="meter-info" id="meterInfo">收音：等待中</div>
       </div>
       <div class="controls">
-        <button id="modeBtn" class="primary" type="button">免提模式</button>
-        <button id="ttsBtn" type="button">系统语音</button>
+        <button id="modeBtn" class="primary" type="button">按讲模式</button>
+        <select id="ttsSelect" aria-label="语音类型">
+          <option value="say">系统语音</option>
+          <option value="siliconflow">硅基语音</option>
+          <option value="siliconflow_moss">硅基 MOSS</option>
+          <option value="bailian">阿里百炼</option>
+        </select>
         <button id="refreshMicBtn" type="button">重连麦克风</button>
         <button id="pttBtn" class="ptt" type="button">按住说话</button>
-        <button id="listenBtn" type="button">暂停监听</button>
+        <button id="listenBtn" type="button" disabled>按住按钮说话</button>
       </div>
     </footer>
   </main>
@@ -305,7 +330,7 @@
     const connection = document.querySelector("#connection");
     const connectionText = document.querySelector("#connectionText");
     const modeBtn = document.querySelector("#modeBtn");
-    const ttsBtn = document.querySelector("#ttsBtn");
+    const ttsSelect = document.querySelector("#ttsSelect");
     const refreshMicBtn = document.querySelector("#refreshMicBtn");
     const pttBtn = document.querySelector("#pttBtn");
     const listenBtn = document.querySelector("#listenBtn");
@@ -313,9 +338,9 @@
     const meterInfo = document.querySelector("#meterInfo");
 
     let ws;
-    let mode = "handsfree";
+    let mode = "ptt";
     let ttsProvider = "say";
-    let listening = true;
+    let listening = false;
     let assistantBubble;
     let pttDown = false;
 
@@ -325,6 +350,7 @@
       thinking: "思考中",
       speaking: "播放中",
     };
+    const ttsProviders = ["say", "siliconflow", "siliconflow_moss", "bailian"];
 
     function connect() {
       ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -373,8 +399,8 @@
     }
 
     function setTtsProvider(provider, notify = true) {
-      ttsProvider = provider === "siliconflow" ? "siliconflow" : "say";
-      ttsBtn.textContent = ttsProvider === "siliconflow" ? "硅基语音" : "系统语音";
+      ttsProvider = ttsProviders.includes(provider) ? provider : "say";
+      ttsSelect.value = ttsProvider;
       if (notify) send({ type: "switch_tts", provider: ttsProvider });
     }
 
@@ -436,8 +462,8 @@
       setMode(mode === "handsfree" ? "ptt" : "handsfree");
     });
 
-    ttsBtn.addEventListener("click", () => {
-      setTtsProvider(ttsProvider === "say" ? "siliconflow" : "say");
+    ttsSelect.addEventListener("change", () => {
+      setTtsProvider(ttsSelect.value);
     });
 
     refreshMicBtn.addEventListener("click", () => {
@@ -478,7 +504,8 @@
       }
     });
 
-    setMode("handsfree", false);
+    setMode("ptt", false);
+    setTtsProvider("say", false);
     connect();
   </script>
 </body>
