@@ -3,14 +3,24 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import re
 import subprocess
 from collections.abc import Awaitable, Callable
+from enum import Enum
 from typing import Optional, Union
 
 import config
 
 
 TokenCallback = Callable[[str], Union[Awaitable[None], None]]
+
+
+class ReplyPolicy(str, Enum):
+    BACKCHANNEL = "backchannel"
+    DIRECT = "direct"
+    TASK = "task"
+    CHAT = "chat"
+    DEEP = "deep"
 
 
 class ClaudeClient:
@@ -118,13 +128,68 @@ class ClaudeClient:
 
     @staticmethod
     def _prepare_user_text(user_text: str) -> str:
-        prefix = config.DEEP_THINK_PREFIX if _needs_deep_think(user_text) else config.FAST_REPLY_PREFIX
+        prefix = REPLY_POLICY_PREFIXES[classify_reply_policy(user_text)]
         return prefix + user_text
 
 
+REPLY_POLICY_PREFIXES = {
+    ReplyPolicy.BACKCHANNEL: config.BACKCHANNEL_REPLY_PREFIX,
+    ReplyPolicy.DIRECT: config.DIRECT_REPLY_PREFIX,
+    ReplyPolicy.TASK: config.TASK_REPLY_PREFIX,
+    ReplyPolicy.CHAT: config.CHAT_REPLY_PREFIX,
+    ReplyPolicy.DEEP: config.DEEP_THINK_PREFIX,
+}
+
+
+BACKCHANNEL_WORDS = frozenset({
+    "嗯", "哦", "好", "行", "对", "是", "懂", "知道了", "好的", "行吧",
+    "是吗", "真的吗", "假的吧", "不是吧", "天哪", "卧槽", "厉害",
+    "ok", "嗯嗯", "哦哦", "呵呵", "哈哈", "嘿嘿",
+    "谢了", "谢谢", "辛苦了", "拜拜", "再见", "晚安", "早",
+    "yes", "no", "sure", "thanks", "thankyou",
+})
+
+
+TASK_MARKERS = (
+    "帮我", "给我", "替我", "为我", "帮忙", "查一下", "搜一下", "找一下",
+    "搜索", "查找", "打开", "启动", "关闭", "重启", "新建", "创建",
+    "总结", "整理", "写一", "写个", "写一个", "改一下", "修改", "修复", "生成", "翻译",
+    "review", "运行", "执行", "测试", "部署", "安装",
+)
+
+
+DIRECT_QUESTION_MARKERS = (
+    "？", "?", "谁", "哪", "几", "怎", "咋", "啥", "什么", "吗", "呢",
+    "如何", "天气", "时间", "几点", "多久", "多少", "哪里", "哪个",
+    "要不要", "能不能", "可以不", "可不可以", "为什么", "怎么办",
+    "是不是", "有没有", "该不该", "讲讲", "解释", "介绍",
+)
+NORMALIZE_PUNCTUATION_RE = re.compile(r"[，。！？、…—\-！,.?~～\s]")
+
+
+def classify_reply_policy(user_text: str) -> ReplyPolicy:
+    stripped = user_text.strip()
+    cleaned = _normalize_input(stripped)
+    if not cleaned:
+        return ReplyPolicy.BACKCHANNEL
+    if _needs_deep_think(cleaned):
+        return ReplyPolicy.DEEP
+    if cleaned in BACKCHANNEL_WORDS:
+        return ReplyPolicy.BACKCHANNEL
+    if any(marker in cleaned for marker in TASK_MARKERS):
+        return ReplyPolicy.TASK
+    if any(marker in cleaned for marker in DIRECT_QUESTION_MARKERS):
+        return ReplyPolicy.DIRECT
+    return ReplyPolicy.CHAT
+
+
+def _normalize_input(user_text: str) -> str:
+    return NORMALIZE_PUNCTUATION_RE.sub("", user_text).lower()
+
+
 def _needs_deep_think(user_text: str) -> bool:
-    normalized = user_text.replace(" ", "")
-    return any(trigger in normalized for trigger in config.DEEP_THINK_TRIGGERS)
+    normalized = _normalize_input(user_text)
+    return any(_normalize_input(trigger) in normalized for trigger in config.DEEP_THINK_TRIGGERS)
 
 
 def _get_running_loop() -> asyncio.AbstractEventLoop:
