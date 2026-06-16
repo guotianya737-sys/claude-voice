@@ -29,6 +29,7 @@
     "audio_format": "pcm_24000",
     "speech_rate": 1.1,
     "volume": 50,
-    "pitch_rate": 1.0
+    "pitch_rate": 1.0,
+    "instruction": ""
   }
 }

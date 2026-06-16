@@ -7,16 +7,20 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #f7f4f0;
-      --panel: #fffaf5;
-      --ink: #241f22;
-      --muted: #71676c;
-      --line: #e7d8d2;
-      --user: #244c5a;
-      --assistant: #8a2f54;
-      --accent: #d95f84;
-      --accent-2: #2f7a72;
-      --shadow: 0 18px 45px rgba(36, 31, 34, 0.13);
+      --desktop: #e8edf3;
+      --desktop-deep: #cfd8e3;
+      --glass: rgba(255, 255, 255, 0.48);
+      --glass-strong: rgba(255, 255, 255, 0.66);
+      --ink: #101820;
+      --muted: rgba(16, 24, 32, 0.62);
+      --line: rgba(255, 255, 255, 0.58);
+      --hairline: rgba(35, 49, 63, 0.12);
+      --accent: #176b72;
+      --danger: #e34d5b;
+      --warning: #c98518;
+      --success: #1f9b69;
+      --shadow: 0 34px 90px rgba(49, 62, 80, 0.24);
+      --inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.88);
     }
 
     * {
@@ -27,94 +31,157 @@
       margin: 0;
       min-height: 100vh;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      font-size: 15px;
       background:
-        linear-gradient(135deg, rgba(217, 95, 132, 0.16), transparent 42%),
-        linear-gradient(315deg, rgba(47, 122, 114, 0.14), transparent 46%),
-        var(--bg);
+        linear-gradient(135deg, rgba(37, 84, 126, 0.16) 0%, rgba(37, 84, 126, 0) 46%),
+        linear-gradient(225deg, rgba(43, 139, 128, 0.16) 0%, rgba(43, 139, 128, 0) 44%),
+        linear-gradient(180deg, var(--desktop) 0%, var(--desktop-deep) 100%);
       color: var(--ink);
       display: grid;
       place-items: center;
-      padding: 24px;
+      padding: 28px;
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.22) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.18) 1px, transparent 1px);
+      background-size: 88px 88px;
+      mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 82%, transparent 100%);
+      opacity: 0.34;
     }
 
     .app {
-      width: min(780px, 100%);
-      height: min(820px, calc(100vh - 48px));
-      min-height: 520px;
-      background: rgba(255, 250, 245, 0.92);
+      width: min(980px, 100%);
+      height: min(820px, calc(100vh - 56px));
+      min-height: 560px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.38)),
+        var(--glass);
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 28px;
       box-shadow: var(--shadow);
       display: grid;
       grid-template-rows: auto 1fr auto;
       overflow: hidden;
-      backdrop-filter: blur(18px);
+      backdrop-filter: blur(34px) saturate(1.35);
+      -webkit-backdrop-filter: blur(34px) saturate(1.35);
+      position: relative;
+    }
+
+    .app::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      box-shadow: var(--inner-highlight), inset 0 -1px 0 rgba(35, 49, 63, 0.08);
     }
 
     header,
-    footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 14px 16px;
-      border-color: var(--line);
+    footer,
+    .messages {
+      position: relative;
+      z-index: 1;
     }
 
     header {
-      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 72px;
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid var(--hairline);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.16));
     }
 
-    footer {
-      border-top: 1px solid var(--line);
-      flex-wrap: wrap;
+    .window-title {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 14px;
     }
+
+    .traffic-lights {
+      display: flex;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+
+    .traffic-lights span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    }
+
+    .traffic-lights span:nth-child(1) { background: #ff5f57; }
+    .traffic-lights span:nth-child(2) { background: #ffbd2e; }
+    .traffic-lights span:nth-child(3) { background: #28c840; }
 
     h1 {
       margin: 0;
-      font-size: 18px;
-      font-weight: 720;
+      font-size: 19px;
+      font-weight: 760;
       letter-spacing: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .status {
-      display: inline-flex;
+      display: flex;
       align-items: center;
       gap: 8px;
-      min-width: 128px;
+      min-width: 118px;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 650;
+      padding: 9px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.38);
+      border: 1px solid rgba(255, 255, 255, 0.58);
+      box-shadow: var(--inner-highlight), 0 10px 26px rgba(42, 54, 70, 0.1);
+      backdrop-filter: blur(22px) saturate(1.25);
+      -webkit-backdrop-filter: blur(22px) saturate(1.25);
     }
 
     .dot {
       width: 10px;
       height: 10px;
       border-radius: 999px;
-      background: #b7b0b3;
-      box-shadow: 0 0 0 4px rgba(183, 176, 179, 0.18);
+      background: #8e98a5;
+      box-shadow: 0 0 0 4px rgba(142, 152, 165, 0.18);
+      flex: 0 0 auto;
     }
 
     .status[data-status="listening"] .dot {
-      background: #d94141;
-      box-shadow: 0 0 0 4px rgba(217, 65, 65, 0.16);
+      background: var(--danger);
+      box-shadow: 0 0 0 4px rgba(227, 77, 91, 0.16), 0 0 18px rgba(227, 77, 91, 0.38);
     }
 
     .status[data-status="thinking"] .dot {
-      background: #d7a11d;
-      box-shadow: 0 0 0 4px rgba(215, 161, 29, 0.18);
+      background: var(--warning);
+      box-shadow: 0 0 0 4px rgba(201, 133, 24, 0.18), 0 0 18px rgba(201, 133, 24, 0.32);
     }
 
     .status[data-status="speaking"] .dot {
-      background: #2f9b72;
-      box-shadow: 0 0 0 4px rgba(47, 155, 114, 0.18);
+      background: var(--success);
+      box-shadow: 0 0 0 4px rgba(31, 155, 105, 0.18), 0 0 18px rgba(31, 155, 105, 0.34);
     }
 
     .messages {
       overflow: auto;
-      padding: 18px 16px 28px;
+      padding: 28px 28px 34px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 14px;
       scroll-behavior: smooth;
     }
 
@@ -123,88 +190,198 @@
       color: var(--muted);
       text-align: center;
       font-size: 15px;
+      padding: 12px 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.26);
+      border: 1px solid rgba(255, 255, 255, 0.4);
     }
 
     .bubble {
-      max-width: min(620px, 92%);
-      border-radius: 8px;
-      padding: 11px 13px;
-      line-height: 1.65;
+      max-width: min(680px, 88%);
+      border-radius: 20px;
+      padding: 13px 15px 14px;
+      line-height: 1.62;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      border: 1px solid transparent;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      box-shadow: var(--inner-highlight), 0 12px 30px rgba(45, 58, 76, 0.09);
+      backdrop-filter: blur(18px) saturate(1.25);
+      -webkit-backdrop-filter: blur(18px) saturate(1.25);
     }
 
     .bubble.user {
       align-self: flex-end;
-      background: rgba(36, 76, 90, 0.1);
-      border-color: rgba(36, 76, 90, 0.22);
+      color: #08151b;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(238, 250, 250, 0.38));
+      border-color: rgba(23, 107, 114, 0.18);
     }
 
     .bubble.assistant {
       align-self: flex-start;
-      background: rgba(138, 47, 84, 0.1);
-      border-color: rgba(138, 47, 84, 0.2);
+      color: #101820;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.64), rgba(246, 248, 255, 0.34));
+      border-color: rgba(52, 87, 213, 0.16);
     }
 
     .speaker {
       display: block;
-      margin-bottom: 3px;
+      margin-bottom: 4px;
       color: var(--muted);
       font-size: 12px;
-      font-weight: 700;
+      font-weight: 720;
     }
 
-    .controls {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
+    footer {
+      padding: 16px;
+      border-top: 1px solid var(--hairline);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.38));
+    }
+
+    .control-surface {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      grid-template-rows: auto auto;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.34));
+      border: 1px solid rgba(255, 255, 255, 0.62);
+      box-shadow: var(--inner-highlight), 0 18px 48px rgba(49, 62, 80, 0.14);
+      backdrop-filter: blur(28px) saturate(1.28);
+      -webkit-backdrop-filter: blur(28px) saturate(1.28);
     }
 
     .footer-info {
-      display: flex;
+      grid-column: 1 / -1;
+      grid-row: 1;
+      display: grid;
+      grid-template-columns: auto minmax(170px, 1fr) minmax(220px, 300px);
       align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
+      gap: 10px;
       min-width: 0;
     }
 
     .mic-info {
       color: var(--muted);
       font-size: 13px;
-      max-width: 280px;
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      padding: 0 2px;
     }
 
     .meter-info {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 10px;
       color: var(--muted);
       font-size: 13px;
-      min-width: 168px;
+      min-width: 0;
     }
 
-    .meter-info.active {
-      color: var(--accent-2);
-      font-weight: 700;
+    .meter-track {
+      position: relative;
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(16, 24, 32, 0.12);
+      box-shadow: inset 0 1px 1px rgba(16, 24, 32, 0.12);
+    }
+
+    .meter-fill {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      transition: width 0.12s ease, background 0.12s ease;
+    }
+
+    .meter-info.active .meter-fill {
+      background: linear-gradient(90deg, var(--danger), #ff8a7a);
+    }
+
+    .controls {
+      grid-column: 2;
+      grid-row: 2;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .text-input-row {
+      grid-column: 1;
+      grid-row: 2;
+      display: flex;
+      gap: 8px;
+    }
+
+    .text-input-row input {
+      flex: 1;
+      min-width: 0;
+      height: 42px;
+      border: 1px solid rgba(255, 255, 255, 0.54);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.42);
+      color: var(--ink);
+      padding: 0 14px;
+      font: inherit;
+      font-size: 14px;
+      outline: none;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+
+    .text-input-row input:focus {
+      background: rgba(255, 255, 255, 0.66);
+      border-color: rgba(23, 107, 114, 0.42);
+      box-shadow: var(--inner-highlight), 0 0 0 4px rgba(23, 107, 114, 0.1);
+    }
+
+    .text-input-row input::placeholder {
+      color: rgba(16, 24, 32, 0.46);
     }
 
     button,
     select {
-      height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
+      height: 42px;
+      border: 1px solid rgba(255, 255, 255, 0.58);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.42);
       color: var(--ink);
-      padding: 0 12px;
+      padding: 0 14px;
       font: inherit;
+      font-size: 14px;
+      font-weight: 650;
       cursor: pointer;
+      box-shadow: var(--inner-highlight), 0 8px 20px rgba(42, 54, 70, 0.08);
+      backdrop-filter: blur(20px) saturate(1.18);
+      -webkit-backdrop-filter: blur(20px) saturate(1.18);
+      transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+    }
+
+    button:hover,
+    select:hover {
+      border-color: rgba(23, 107, 114, 0.36);
+      background: rgba(255, 255, 255, 0.58);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button:disabled {
+      opacity: 0.48;
+      cursor: default;
+      transform: none;
     }
 
     select {
-      min-width: 126px;
+      min-width: 132px;
       appearance: none;
       background-image:
         linear-gradient(45deg, transparent 50%, var(--muted) 50%),
@@ -217,65 +394,127 @@
       padding-right: 32px;
     }
 
-    button:hover,
-    select:hover {
-      border-color: rgba(217, 95, 132, 0.55);
-    }
-
     button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: white;
-      min-width: 132px;
+      background: rgba(255, 255, 255, 0.5);
+      color: var(--accent);
+      min-width: 106px;
     }
 
     button.ptt {
-      background: var(--accent-2);
-      border-color: var(--accent-2);
+      background: linear-gradient(180deg, rgba(23, 107, 114, 0.95), rgba(17, 88, 95, 0.9));
+      border-color: rgba(255, 255, 255, 0.46);
       color: white;
-      min-width: 142px;
+      min-width: 132px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 12px 28px rgba(23, 107, 114, 0.22);
     }
 
     button.ptt.recording {
-      filter: brightness(0.9);
-      transform: translateY(1px);
+      background: linear-gradient(180deg, #e85f6b, #c93648);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 14px 32px rgba(227, 77, 91, 0.28);
     }
 
-    @media (max-width: 560px) {
+    button.icon {
+      width: 42px;
+      padding: 0;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    #sendTextBtn {
+      min-width: 64px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --desktop: #111923;
+        --desktop-deep: #1f2b36;
+        --glass: rgba(18, 27, 36, 0.52);
+        --glass-strong: rgba(32, 42, 54, 0.72);
+        --ink: #f3f7fb;
+        --muted: rgba(243, 247, 251, 0.62);
+        --hairline: rgba(255, 255, 255, 0.13);
+        --shadow: 0 34px 90px rgba(0, 0, 0, 0.35);
+      }
+
+      .app,
+      .control-surface,
+      .bubble,
+      .status,
+      button,
+      select,
+      .text-input-row input {
+        border-color: rgba(255, 255, 255, 0.16);
+      }
+
+      .bubble.user,
+      .bubble.assistant,
+      .text-input-row input,
+      button,
+      select,
+      .status {
+        background-color: rgba(255, 255, 255, 0.12);
+      }
+    }
+
+    @media (max-width: 760px) {
       body {
         padding: 0;
+        overflow: hidden;
       }
 
       .app {
         height: 100vh;
+        min-height: 100vh;
+        border: 0;
         border-radius: 0;
-        border-left: 0;
-        border-right: 0;
       }
 
-      header,
-      footer {
+      header {
+        min-height: 64px;
         padding: 12px;
       }
 
-      .status,
-      .footer-info,
-      .mic-info,
-      .meter-info,
+      .messages {
+        padding: 18px 12px 22px;
+      }
+
+      .control-surface {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        border-radius: 22px;
+      }
+
+      .footer-info {
+        grid-column: 1;
+        grid-row: 1;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
       .controls {
+        grid-column: 1;
+        grid-row: 2;
+        justify-content: flex-start;
         width: 100%;
       }
 
-      .mic-info {
-        max-width: none;
+      .text-input-row {
+        grid-column: 1;
+        grid-row: 3;
       }
 
-      .controls button {
+      .status {
+        min-width: auto;
+      }
+
+      .meter-info {
+        grid-template-columns: minmax(72px, auto) 1fr;
+      }
+
+      .controls select,
+      .controls button:not(.icon) {
         flex: 1 1 auto;
-      }
-
-      .controls select {
-        flex: 1 1 100%;
+        min-width: 0;
       }
     }
   </style>
@@ -283,7 +522,14 @@
 <body>
   <main class="app">
     <header>
-      <h1>claude-voice</h1>
+      <div class="window-title">
+        <div class="traffic-lights" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <h1>claude-voice</h1>
+      </div>
       <div class="status" data-status="idle">
         <span class="dot"></span>
         <span id="statusText">空闲</span>
@@ -295,26 +541,35 @@
     </section>
 
     <footer>
-      <div class="footer-info">
-        <div class="status" data-status="idle" id="connection">
-          <span class="dot"></span>
-          <span id="connectionText">连接中</span>
+      <div class="control-surface">
+        <div class="footer-info">
+          <div class="status" data-status="idle" id="connection">
+            <span class="dot"></span>
+            <span id="connectionText">连接中</span>
+          </div>
+          <div class="mic-info" id="micInfo" title="当前麦克风">麦克风：检测中</div>
+          <div class="meter-info" id="meterInfo">
+            <span id="meterText">收音：等待中</span>
+            <span class="meter-track" aria-hidden="true"><span class="meter-fill" id="meterBar"></span></span>
+          </div>
         </div>
-        <div class="mic-info" id="micInfo" title="当前麦克风">麦克风：检测中</div>
-        <div class="meter-info" id="meterInfo">收音：等待中</div>
-      </div>
-      <div class="controls">
-        <button id="modeBtn" class="primary" type="button">按讲模式</button>
-        <select id="ttsSelect" aria-label="语音类型">
-          <option value="say">系统语音</option>
-          <option value="siliconflow">硅基语音</option>
-          <option value="siliconflow_moss">硅基 MOSS</option>
-          <option value="bailian">阿里百炼</option>
-        </select>
-        <button id="newConversationBtn" type="button">新对话</button>
-        <button id="refreshMicBtn" type="button">重连麦克风</button>
-        <button id="pttBtn" class="ptt" type="button">按住说话</button>
-        <button id="listenBtn" type="button" disabled>按住按钮说话</button>
+        <div class="controls">
+          <button id="modeBtn" class="primary" type="button">按讲模式</button>
+          <select id="ttsSelect" aria-label="语音类型">
+            <option value="say">系统语音</option>
+            <option value="siliconflow">硅基语音</option>
+            <option value="siliconflow_moss">硅基 MOSS</option>
+            <option value="bailian">阿里百炼</option>
+          </select>
+          <button id="newConversationBtn" class="icon" type="button" title="新对话" aria-label="新对话">+</button>
+          <button id="refreshMicBtn" class="icon" type="button" title="重连麦克风" aria-label="重连麦克风">↻</button>
+          <button id="pttBtn" class="ptt" type="button">按住说话</button>
+          <button id="listenBtn" type="button" disabled>开始监听</button>
+        </div>
+        <div class="text-input-row">
+          <input id="textInput" type="text" placeholder="输入文字，按 Enter 发送..." maxlength="4096" autocomplete="off">
+          <button id="sendTextBtn" type="button">发送</button>
+        </div>
       </div>
     </footer>
   </main>
@@ -336,8 +591,12 @@
     const refreshMicBtn = document.querySelector("#refreshMicBtn");
     const pttBtn = document.querySelector("#pttBtn");
     const listenBtn = document.querySelector("#listenBtn");
+    const textInput = document.querySelector("#textInput");
+    const sendTextBtn = document.querySelector("#sendTextBtn");
     const micInfo = document.querySelector("#micInfo");
     const meterInfo = document.querySelector("#meterInfo");
+    const meterText = document.querySelector("#meterText");
+    const meterBar = document.querySelector("#meterBar");
 
     let ws;
     let mode = "ptt";
@@ -345,6 +604,9 @@
     let listening = false;
     let assistantBubble;
     let pttDown = false;
+    let reconnectDelay = 500;
+    const RECONNECT_BASE = 500;
+    const RECONNECT_MAX = 15000;
 
     const statusLabels = {
       idle: "空闲",
@@ -357,13 +619,15 @@
     function connect() {
       ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
       ws.addEventListener("open", () => {
+        reconnectDelay = RECONNECT_BASE;
         connection.dataset.status = "speaking";
         connectionText.textContent = "已连接";
       });
       ws.addEventListener("close", () => {
         connection.dataset.status = "idle";
         connectionText.textContent = "重连中";
-        setTimeout(connect, 900);
+        setTimeout(connect, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
       });
       ws.addEventListener("message", (event) => {
         const msg = JSON.parse(event.data);
@@ -388,7 +652,8 @@
     function setStatus(status) {
       statusBox.dataset.status = status;
       statusText.textContent = statusLabels[status] || status;
-      listenBtn.textContent = mode === "ptt" ? "按住按钮说话" : (status === "idle" ? "开始监听" : "暂停监听");
+      pttBtn.textContent = status === "speaking" ? "按住打断" : "按住说话";
+      listenBtn.textContent = mode === "ptt" ? "开始监听" : (status === "idle" ? "开始监听" : "暂停监听");
       listening = status !== "idle";
     }
 
@@ -397,7 +662,7 @@
       modeBtn.textContent = mode === "handsfree" ? "免提模式" : "按讲模式";
       pttBtn.disabled = mode !== "ptt";
       listenBtn.disabled = mode === "ptt";
-      listenBtn.textContent = mode === "ptt" ? "按住按钮说话" : (listening ? "暂停监听" : "开始监听");
+      listenBtn.textContent = mode === "ptt" ? "开始监听" : (listening ? "暂停监听" : "开始监听");
       if (notify) send({ type: "switch_mode", mode });
     }
 
@@ -411,7 +676,7 @@
       const name = input.name || "未知";
       const rate = input.sample_rate ? `${input.sample_rate}Hz` : "";
       const target = input.target_sample_rate && input.target_sample_rate !== input.sample_rate
-        ? ` → ${input.target_sample_rate}Hz`
+        ? ` -> ${input.target_sample_rate}Hz`
         : "";
       const text = `麦克风：${name}${rate ? ` (${rate}${target})` : ""}`;
       micInfo.textContent = text;
@@ -419,11 +684,15 @@
     }
 
     function setAudioMeter(meter) {
-      const db = Number.isFinite(meter.db) ? `${meter.db.toFixed(1)} dB` : "-- dB";
-      const prob = Number.isFinite(meter.prob) ? `${Math.round(meter.prob * 100)}%` : "--%";
-      meterInfo.textContent = meter.speech
-        ? `检测到语音：${db} / ${prob}`
-        : `收音：${db} / 语音 ${prob}`;
+      const dbValue = Number.isFinite(meter.db) ? meter.db : null;
+      const probValue = Number.isFinite(meter.prob) ? meter.prob : null;
+      const db = dbValue === null ? "-- dB" : `${dbValue.toFixed(1)} dB`;
+      const prob = probValue === null ? "--%" : `${Math.round(probValue * 100)}%`;
+      meterText.textContent = meter.speech
+        ? `语音：${db} / ${prob}`
+        : `收音：${db} / ${prob}`;
+      const level = dbValue === null ? 0 : Math.max(0, Math.min(100, (dbValue - 45) * 2.2));
+      meterBar.style.width = `${level}%`;
       meterInfo.classList.toggle("active", Boolean(meter.speech));
       meterInfo.title = `阈值：${meter.db_threshold} dB / ${Math.round(meter.prob_threshold * 100)}%`;
     }
@@ -517,6 +786,26 @@
         pttEnd();
       }
     });
+
+    function sendText() {
+      const text = textInput.value.trim();
+      if (!hasTextSignal(text)) return;
+      textInput.value = "";
+      send({ type: "text_input", text });
+    }
+
+    function hasTextSignal(text) {
+      return /[A-Za-z0-9\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text);
+    }
+
+    textInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        sendText();
+      }
+    });
+
+    sendTextBtn.addEventListener("click", sendText);
 
     setMode("ptt", false);
     setTtsProvider("say", false);

@@ -93,7 +93,7 @@ class ClaudeClient:
                 chunks.append(text)
                 if on_token is not None:
                     result = on_token(text)
-                    if asyncio.iscoroutine(result):
+                    if asyncio.iscoroutine(result) or asyncio.isfuture(result):
                         token_futures.append(asyncio.run_coroutine_threadsafe(result, loop))
 
             if self._is_done_event(event):

@@ -9,6 +9,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,6 +155,7 @@ class SiliconFlowTTS:
         self.speed = speed
         self.gain = gain
         self._proc: Optional[subprocess.Popen[str]] = None
+        self._stop_requested = threading.Event()
 
     @property
     def configured(self) -> bool:
@@ -203,6 +205,7 @@ class SiliconFlowTTS:
         )
 
     async def speak(self, text: str) -> bool:
+        self._stop_requested.clear()
         prepared = await self.prepare(text)
         if prepared is None:
             return False
@@ -211,6 +214,7 @@ class SiliconFlowTTS:
     async def prepare(self, text: str) -> Optional[PreparedSpeech]:
         if not self.configured:
             return None
+        self._stop_requested.clear()
         audio_path = await self._generate_audio(text)
         if audio_path is None:
             return None
@@ -220,13 +224,14 @@ class SiliconFlowTTS:
         if prepared.audio_path is None:
             return False
         try:
-            await asyncio.to_thread(self._play_audio, prepared.audio_path)
+            await asyncio.to_thread(_play_audio_file, prepared.audio_path, self._stop_requested)
             return True
         finally:
             with contextlib.suppress(FileNotFoundError):
                 prepared.audio_path.unlink()
 
     def stop(self) -> None:
+        self._stop_requested.set()
         _stop_proc(self._proc)
         self._proc = None
 
@@ -280,6 +285,7 @@ class BailianTTS:
         speech_rate: float,
         volume: int,
         pitch_rate: float,
+        instruction: str = "",
     ) -> None:
         self.provider = "bailian"
         self.api_key = api_key
@@ -292,6 +298,8 @@ class BailianTTS:
         self.speech_rate = speech_rate
         self.volume = volume
         self.pitch_rate = pitch_rate
+        self.instruction = instruction
+        self._emotion_instruction: Optional[str] = None
         self._proc: Optional[subprocess.Popen[str]] = None
         self._active_synth = None
         self._active_stream: Optional[sd.RawOutputStream] = None
@@ -301,6 +309,20 @@ class BailianTTS:
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def active_instruction(self) -> Optional[str]:
+        """Return emotion override if set, otherwise the base instruction."""
+        if self._emotion_instruction is not None:
+            return self._emotion_instruction
+        return self.instruction or None
+
+    def set_emotion(self, emotion: str) -> None:
+        mapping = config.BAILIAN_EMOTION_INSTRUCTIONS
+        self._emotion_instruction = mapping.get(emotion)
+
+    def clear_emotion(self) -> None:
+        self._emotion_instruction = None
 
     @classmethod
     def from_config(cls) -> "BailianTTS":
@@ -322,6 +344,7 @@ class BailianTTS:
             speech_rate=float(bailian_config.get("speech_rate", config.BAILIAN_SPEECH_RATE)),
             volume=int(bailian_config.get("volume", config.BAILIAN_VOLUME)),
             pitch_rate=float(bailian_config.get("pitch_rate", config.BAILIAN_PITCH_RATE)),
+            instruction=str(bailian_config.get("instruction", config.BAILIAN_INSTRUCTION)),
         )
 
     def _ensure_dashscope(self) -> None:
@@ -345,6 +368,7 @@ class BailianTTS:
             volume=self.volume,
             speech_rate=self.speech_rate,
             pitch_rate=self.pitch_rate,
+            instruction=self.active_instruction,
             callback=callback,
         )
 
@@ -399,7 +423,7 @@ class BailianTTS:
         if prepared.audio_path is None:
             return False
         try:
-            await asyncio.to_thread(self._play_audio, prepared.audio_path)
+            await asyncio.to_thread(_play_audio_file, prepared.audio_path, self._stop_requested)
             return True
         finally:
             with contextlib.suppress(FileNotFoundError):
@@ -421,6 +445,7 @@ class BailianTTS:
                 voice=self.voice,
                 language_type="Chinese",
                 stream=True,
+                **({"instruction": self.active_instruction} if self.active_instruction else {}),
             )
             wrote_audio = False
             with path.open("wb") as file:
@@ -455,22 +480,9 @@ class BailianTTS:
                     path.unlink()
 
     def _play_audio(self, audio_path: Path) -> None:
-        if self._stop_requested.is_set():
-            return
         self._proc = subprocess.Popen(["afplay", str(audio_path)])
         self._proc.wait()
         self._proc = None
-
-    def _speak_qwen_http(self, text: str) -> bool:
-        prepared = self._generate_qwen_http_audio(text)
-        if prepared is None:
-            return False
-        try:
-            self._play_audio(prepared)
-            return not self._stop_requested.is_set()
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                prepared.unlink()
 
     def _stream_qwen_realtime_to_speaker(self, text: str) -> bool:
         self._ensure_dashscope()
@@ -562,6 +574,7 @@ class BailianTTS:
                 speech_rate=self.speech_rate,
                 pitch_rate=self.pitch_rate,
                 mode="server_commit",
+                **({"instructions": self.active_instruction} if self.active_instruction else {}),
             )
             realtime.append_text(text)
             realtime.finish()
@@ -696,6 +709,22 @@ def _stop_proc(proc: Optional[subprocess.Popen[str]]) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=1)
+
+
+def _play_audio_file(audio_path: Path, stop_event: Optional[threading.Event] = None) -> None:
+    """播放单个音频文件，并在 stop_event 触发时终止 afplay。"""
+    if stop_event is not None and stop_event.is_set():
+        return
+    proc = subprocess.Popen(["afplay", str(audio_path)])
+    try:
+        while proc.poll() is None:
+            if stop_event is not None and stop_event.is_set():
+                _stop_proc(proc)
+                return
+            time.sleep(0.05)
+    finally:
+        if proc.poll() is None:
+            _stop_proc(proc)
 
 
 def _load_tts_config() -> dict:

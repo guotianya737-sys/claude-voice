@@ -14,6 +14,7 @@ import claude_client
 import config
 from asr_engine import ASREngine
 from audio_io import AudioCapture
+from audio_util import dbfs  # noqa: F811 — shared with vad.py, used via MiruVoiceApp.dbfs
 from claude_client import ClaudeClient
 from server import VoiceServer
 from tts_engine import PreparedSpeech, TTSEngine
@@ -49,23 +50,68 @@ class StreamingReplySpeaker:
         self.interrupted_pcm: Optional[bytes] = None
         self.closed = False
         self.displayed_text = ""
+        self._emotion_tag_parsed = False
+        self._opening_line = ""
+        self.app.tts.bailian.clear_emotion()
 
     async def feed(self, token: str) -> None:
         if self.closed or self.interrupted_pcm is not None or self.conversation_id != self.app.conversation_id:
             return
-        self.displayed_text += token
-        await self.app.server.broadcast({"type": "assistant_token", "text": token})
-        self.buffer += token
-        for chunk in self._pop_ready_chunks(flush=False):
-            await self.queue.put(chunk)
+        if not self._emotion_tag_parsed:
+            self._opening_line += token
+            if not self._opening_may_be_emotion_tag():
+                self._emotion_tag_parsed = True
+                text = self._opening_line
+                self._opening_line = ""
+                await self._append_visible_text(text)
+                return
+            if "\n" in self._opening_line:
+                self._emotion_tag_parsed = True
+                line, rest = self._opening_line.split("\n", 1)
+                visible = self._parse_emotion_line(line)
+                text = visible + ("\n" if visible else "") + rest
+                self._opening_line = ""
+                await self._append_visible_text(text)
+            return
+        await self._append_visible_text(token)
 
     async def finish(self) -> Optional[bytes]:
+        # Flush any partial opening-line if response never emitted a newline
+        if not self._emotion_tag_parsed and self._opening_line:
+            self._emotion_tag_parsed = True
+            visible = self._parse_emotion_line(self._opening_line)
+            self._opening_line = ""
+            await self._append_visible_text(visible)
         for chunk in self._pop_ready_chunks(flush=True):
             await self.queue.put(chunk)
         await self.queue.put(None)
         await self.worker
         self.closed = True
         return self.interrupted_pcm
+
+    def _parse_emotion_line(self, line: str) -> str:
+        match = config.EMOTION_TAG_RE.match(line)
+        if not match:
+            return line
+        emotion = match.group(1).lower()
+        if emotion in {"none", "default"}:
+            self.app.tts.bailian.clear_emotion()
+        else:
+            self.app.tts.bailian.set_emotion(emotion)
+        return match.group(2).lstrip()
+
+    def _opening_may_be_emotion_tag(self) -> bool:
+        stripped = self._opening_line.lstrip().lower()
+        return not stripped or "[emotion:".startswith(stripped) or stripped.startswith("[emotion:")
+
+    async def _append_visible_text(self, text: str) -> None:
+        if not text:
+            return
+        self.displayed_text += text
+        await self.app.server.broadcast({"type": "assistant_token", "text": text})
+        self.buffer += text
+        for chunk in self._pop_ready_chunks(flush=False):
+            await self.queue.put(chunk)
 
     async def _worker(self) -> None:
         while True:
@@ -214,6 +260,8 @@ class MiruVoiceApp:
         self.ptt_barge_in_future: Optional[asyncio.Future[Optional[bytes]]] = None
         self.conversation_id = 0
         self.closed = asyncio.Event()
+        self.background_tasks: set[asyncio.Task] = set()
+        self.turn_lock = asyncio.Lock()
         self.last_meter_at = 0.0
 
         self.audio = AudioCapture()
@@ -245,6 +293,10 @@ class MiruVoiceApp:
         self.audio.close()
         self.tts.stop()
         self.claude.close()
+        for task in list(self.background_tasks):
+            task.cancel()
+        if self.background_tasks:
+            await asyncio.gather(*self.background_tasks, return_exceptions=True)
         await self.server.stop()
 
     async def handle_command(self, payload: dict) -> None:
@@ -290,6 +342,7 @@ class MiruVoiceApp:
             self.ptt_chunks.clear()
             self.drain_audio_queue()
             self.ptt_recording = True
+            self.update_audio_processor_ready()
             if is_barge_in:
                 if self.ptt_barge_in_future is None or self.ptt_barge_in_future.done():
                     self.ptt_barge_in_future = asyncio.get_running_loop().create_future()
@@ -308,6 +361,7 @@ class MiruVoiceApp:
                     pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
                 self.ptt_chunks.clear()
                 self.ptt_barge_in_future.set_result(pcm)
+                self.update_audio_processor_ready()
                 return
             if self.ptt_chunks:
                 audio = np.concatenate(self.ptt_chunks)
@@ -316,6 +370,7 @@ class MiruVoiceApp:
             else:
                 self.audio.stop()
                 self.drain_audio_queue()
+            self.update_audio_processor_ready()
             await self.set_status(Status.IDLE)
         elif command == "switch_tts":
             provider = payload.get("provider")
@@ -332,16 +387,20 @@ class MiruVoiceApp:
             if self.mode == Mode.HANDSFREE and self.status == Status.IDLE:
                 self.audio.resume()
                 await self.set_status(Status.LISTENING)
+        elif command == "text_input":
+            text = payload.get("text", "").strip()
+            if text and self.has_text_signal(text):
+                self.track_background_task(asyncio.create_task(self.handle_text_message(text)))
 
     async def process_audio(self) -> None:
         while True:
             await self.audio_processor_ready.wait()
             chunk = await self.audio_queue.get()
-            if self.status != Status.LISTENING:
-                continue
             if self.mode == Mode.PTT:
                 if self.ptt_recording:
                     self.ptt_chunks.append(chunk)
+                continue
+            if self.status != Status.LISTENING:
                 continue
             segments = list(self.vad.process(chunk))
             await self.maybe_broadcast_audio_meter()
@@ -352,6 +411,14 @@ class MiruVoiceApp:
         next_pcm: Optional[bytes] = pcm
         while next_pcm is not None:
             next_pcm = await self.handle_single_segment(next_pcm)
+
+    async def handle_text_message(self, text: str) -> None:
+        next_pcm = await self.handle_user_text(
+            text,
+            timeout_text="Claude 响应超时了，请稍后再说一次。",
+        )
+        if next_pcm is not None:
+            await self.handle_segment(next_pcm)
 
     async def handle_single_segment(self, pcm: bytes) -> Optional[bytes]:
         conversation_id = self.conversation_id
@@ -370,45 +437,74 @@ class MiruVoiceApp:
         if not text:
             await self.resume_after_turn()
             return None
+        if not self.should_accept_asr_text(text):
+            print(f"ignored asr noise: {text!r}")
+            await self.resume_after_turn()
+            return None
         if conversation_id != self.conversation_id:
             return None
 
-        await self.server.broadcast({"type": "user_msg", "text": text})
-        speaker = StreamingReplySpeaker(self)
-        try:
-            reply = await asyncio.wait_for(
-                self.claude.send(text, speaker.feed),
-                timeout=config.CLAUDE_RESPONSE_TIMEOUT,
-            )
-            interrupted_pcm = await speaker.finish()
-        except asyncio.TimeoutError as exc:
-            print(f"claude failed: {type(exc).__name__}: {exc}")
-            self.claude.close()
+        return await self.handle_user_text(
+            text,
+            timeout_text="Claude 响应超时了，可能是服务正在重试或暂时拥堵。请稍后再说一次。",
+        )
+
+    async def handle_user_text(self, text: str, timeout_text: str) -> Optional[bytes]:
+        async with self.turn_lock:
+            conversation_id = self.conversation_id
             self.tts.stop()
-            interrupted_pcm = await speaker.finish()
-            error_text = speaker.displayed_text or "Claude 响应超时了，可能是服务正在重试或暂时拥堵。请稍后再说一次。"
-            if conversation_id == self.conversation_id:
-                await self.server.broadcast({"type": "assistant_done", "text": error_text})
+            self.audio.stop()
+            self.drain_audio_queue()
+            self.vad.reset()
+            await self.set_status(Status.THINKING)
+            await self.server.broadcast({"type": "user_msg", "text": text})
+            speaker = StreamingReplySpeaker(self)
+            try:
+                reply = await asyncio.wait_for(
+                    self.claude.send(text, speaker.feed),
+                    timeout=config.CLAUDE_RESPONSE_TIMEOUT,
+                )
+                interrupted_pcm = await speaker.finish()
+            except asyncio.TimeoutError as exc:
+                print(f"claude failed: {type(exc).__name__}: {exc}")
+                self.claude.close()
+                self.tts.stop()
+                # Signal speaker to drain immediately — the subprocess is dead,
+                # no more tokens will arrive.
+                interrupted_pcm = await speaker.finish()
+                error_text = speaker.displayed_text or timeout_text
+                if conversation_id == self.conversation_id:
+                    await self.server.broadcast({"type": "assistant_done", "text": error_text})
+                await self.resume_after_turn()
+                return interrupted_pcm
+            except Exception as exc:
+                print(f"claude failed: {type(exc).__name__}: {exc}")
+                self.claude.close()
+                self.tts.stop()
+                interrupted_pcm = await speaker.finish()
+                error_text = speaker.displayed_text or f"Claude 这次没接上：{type(exc).__name__}。请稍后再试一次。"
+                if conversation_id == self.conversation_id:
+                    await self.server.broadcast({"type": "assistant_done", "text": error_text})
+                await self.resume_after_turn()
+                return interrupted_pcm
+            if conversation_id != self.conversation_id:
+                return None
+            await self.server.broadcast({"type": "assistant_done", "text": speaker.displayed_text or reply})
+            if interrupted_pcm is not None:
+                await self.server.broadcast({"type": "status", "status": "thinking"})
+                return interrupted_pcm
+            await asyncio.sleep(config.TTS_TAIL_GUARD)
             await self.resume_after_turn()
-            return interrupted_pcm
-        except Exception as exc:
-            print(f"claude failed: {type(exc).__name__}: {exc}")
-            self.tts.stop()
-            interrupted_pcm = await speaker.finish()
-            error_text = speaker.displayed_text or f"Claude 这次没接上：{type(exc).__name__}。请稍后再试一次。"
-            if conversation_id == self.conversation_id:
-                await self.server.broadcast({"type": "assistant_done", "text": error_text})
-            await self.resume_after_turn()
-            return interrupted_pcm
-        if conversation_id != self.conversation_id:
             return None
-        await self.server.broadcast({"type": "assistant_done", "text": speaker.displayed_text or reply})
-        if interrupted_pcm is not None:
-            await self.server.broadcast({"type": "status", "status": "thinking"})
-            return interrupted_pcm
-        await asyncio.sleep(config.TTS_TAIL_GUARD)
-        await self.resume_after_turn()
-        return None
+
+    def track_background_task(self, task: asyncio.Task) -> None:
+        self.background_tasks.add(task)
+
+        def done_callback(done: asyncio.Task) -> None:
+            self.background_tasks.discard(done)
+            self.report_processor_error(done)
+
+        task.add_done_callback(done_callback)
 
     async def start_new_conversation(self) -> None:
         self.conversation_id += 1
@@ -462,10 +558,7 @@ class MiruVoiceApp:
 
     async def set_status(self, status: Status) -> None:
         self.status = status
-        if status == Status.LISTENING:
-            self.audio_processor_ready.set()
-        else:
-            self.audio_processor_ready.clear()
+        self.update_audio_processor_ready()
         await self.server.broadcast({"type": "status", "status": status.value})
 
     def current_state(self) -> list[dict]:
@@ -490,12 +583,6 @@ class MiruVoiceApp:
             self.audio_queue.put_nowait(chunk)
         except asyncio.QueueFull:
             self.drain_audio_queue()
-
-    @staticmethod
-    def dbfs(chunk: np.ndarray) -> float:
-        audio = np.asarray(chunk, dtype=np.float32).reshape(-1)
-        rms = float(np.sqrt(np.mean(np.square(audio))) + 1e-10)
-        return 20.0 * np.log10(rms) + 100.0
 
     @staticmethod
     def report_processor_error(task: asyncio.Task) -> None:
@@ -578,6 +665,7 @@ class MiruVoiceApp:
                 pcm = self.ptt_barge_in_future.result()
                 self.ptt_barge_in_event.clear()
                 self.ptt_barge_in_future = None
+                self.update_audio_processor_ready()
                 return pcm
         has_pending_barge_in = (
             self.ptt_barge_in_event.is_set()
@@ -587,6 +675,7 @@ class MiruVoiceApp:
         if not has_pending_barge_in:
             self.ptt_barge_in_event.clear()
             self.ptt_barge_in_future = None
+            self.update_audio_processor_ready()
         tts_task = asyncio.create_task(play())
         barge_task = asyncio.create_task(self.ptt_barge_in_event.wait())
         try:
@@ -645,11 +734,7 @@ class MiruVoiceApp:
             return True
         if self.should_monitor_barge_in():
             return True
-        if self.status != Status.LISTENING:
-            return False
-        if self.mode == Mode.HANDSFREE:
-            return True
-        return self.mode == Mode.PTT and self.ptt_recording
+        return self.status == Status.LISTENING and self.mode == Mode.HANDSFREE
 
     def relax_barge_vad_for_capture(self) -> None:
         self.barge_vad.prob_threshold = config.PROB_THRESHOLD
@@ -670,6 +755,25 @@ class MiruVoiceApp:
     def is_barge_in_chunk(self, chunk: np.ndarray) -> bool:
         prob, db = self.barge_vad.speech_score(chunk)
         return prob >= config.BARGE_IN_PROB_THRESHOLD and db >= config.BARGE_IN_DB_THRESHOLD
+
+    @staticmethod
+    def should_accept_asr_text(text: str) -> bool:
+        normalized = config.ASR_NOISE_TEXT_RE.sub("", text).lower()
+        if normalized in config.ASR_ALLOWED_SHORT_TEXTS:
+            return True
+        if len(normalized) < config.ASR_MIN_NORMALIZED_CHARS:
+            return False
+        return normalized not in config.ASR_IGNORED_NORMALIZED_TEXTS
+
+    @staticmethod
+    def has_text_signal(text: str) -> bool:
+        return bool(config.ASR_NOISE_TEXT_RE.sub("", text))
+
+    def update_audio_processor_ready(self) -> None:
+        if self.status == Status.LISTENING or (self.mode == Mode.PTT and self.ptt_recording):
+            self.audio_processor_ready.set()
+        else:
+            self.audio_processor_ready.clear()
 
     @staticmethod
     def create_barge_vad(model) -> VADEngine:

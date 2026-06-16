@@ -13,6 +13,8 @@ Claude Code handles all reasoning — persona, memory, tools, and context. This 
 - **Barge-in** — interrupt the assistant mid-speech in both hands-free and PTT modes; captures the full interruption before submitting
 - **Offline ASR** — sherpa-onnx SenseVoice int8, local, private, ~186 MB
 - **Three TTS engines** — macOS `say` (zero-network, instant), SiliconFlow CosyVoice2 / MOSS (cloud), Bailian CosyVoice v3 Flash / Qwen TTS (cloud, streaming)
+- **Emotion-aware TTS** — Bailian TTS dynamically switches voice tone (angry/sad/excited/teasing/worried/loving) based on contextual emotion tags from Claude
+- **Text input** — type messages directly in the Web UI alongside voice input
 - **Web UI** — dialogue bubbles, real-time status indicators, microphone level meter, speech probability
 - **New conversation** — one-click reset of the Claude session from the Web UI
 - **Adaptive noise floor** — dynamically tracks ambient noise to adjust VAD sensitivity
@@ -106,8 +108,10 @@ claude-voice/
 ├── vad.py                # Silero VAD with 3-state state machine
 ├── asr_engine.py         # sherpa-onnx SenseVoice wrapper
 ├── tts_engine.py         # macOS say + SiliconFlow + Bailian TTS
-├── claude_client.py      # claude subprocess stdin/stdout JSON pipe
-├── server.py             # aiohttp HTTP + WebSocket server
+├── tts_text.py            # TTS text normalization
+├── audio_util.py          # Shared audio DSP utilities
+├── claude_client.py       # claude subprocess stdin/stdout JSON pipe
+├── server.py              # aiohttp HTTP + WebSocket server
 ├── static/index.html     # Web UI (vanilla HTML/CSS/JS)
 ├── bench_tts.py          # TTS latency benchmark tool
 ├── pyproject.toml        # Dependencies (uv)

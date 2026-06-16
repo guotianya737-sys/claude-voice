@@ -11,16 +11,6 @@ _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-_EMOTICON_RE = re.compile(
-    r"(?<![A-Za-z0-9])"
-    r"(?:"
-    r"[xX]?[DPOoT][_-]?[xX]?"
-    r"|[:=;8xX][\-o\*']?[\)\]\(\[dDpP/:\}\{@\|\\]"
-    r"|[\(\[]?[>＜]?[ＴTtOoQq；;][＿_\-\.]?[ＴTtOoQq；;][<＞]?[\)\]]?"
-    r"|[\(\[]?[一-龥A-Za-z]?[·\._\-]?[一-龥A-Za-z]?[\)\]]"
-    r")"
-    r"(?![A-Za-z0-9])"
-)
 _BRACKETED_ASIDE_RE = re.compile(r"[\(（][^()（）]{1,24}[\)）]")
 _LEADING_LIST_MARKER_RE = re.compile(r"(?m)^\s*(?:[-*+•]+|\d+[.)、])\s+")
 _MARKDOWN_DECORATION_RE = re.compile(r"[*_#>|]+")

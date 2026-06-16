@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 import config
+from audio_util import dbfs
 
 
 class VADState(str, Enum):
@@ -131,7 +132,7 @@ class VADEngine:
     def speech_score(self, chunk: np.ndarray) -> tuple[float, float]:
         normalized = self._normalize(chunk)
         self.last_prob = self._speech_probability(normalized)
-        self.last_db = self._dbfs(normalized)
+        self.last_db = dbfs(normalized)
         return self.last_prob, self.last_db
 
     def _speech_samples(self) -> int:
@@ -144,11 +145,6 @@ class VADEngine:
         if hasattr(value, "item"):
             return float(value.item())
         return float(value)
-
-    @staticmethod
-    def _dbfs(chunk: np.ndarray) -> float:
-        rms = float(np.sqrt(np.mean(np.square(chunk))) + 1e-10)
-        return 20.0 * np.log10(rms) + 100.0
 
     @staticmethod
     def _normalize(audio_chunk: np.ndarray) -> np.ndarray:

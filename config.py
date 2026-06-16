@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -35,6 +36,25 @@ BAILIAN_TTS_CHUNK_MAX_CHARS = 90
 BAILIAN_PREFETCH_TTS_CHUNK_MIN_CHARS = 48
 BAILIAN_PREFETCH_TTS_CHUNK_MAX_CHARS = 160
 ASR_TIMEOUT = 20
+ASR_MIN_NORMALIZED_CHARS = 2
+ASR_ALLOWED_SHORT_TEXTS = frozenset({
+    "嗯",
+    "哦",
+    "好",
+    "行",
+    "对",
+    "是",
+    "不",
+    "要",
+    "喂",
+    "啊",
+})
+ASR_IGNORED_NORMALIZED_TEXTS = frozenset({
+    "miru",
+    "milu",
+    "米露",
+})
+ASR_NOISE_TEXT_RE = re.compile(r"[\s，。！？、…—\-！,.?~～`'\"“”‘’()\[\]{}<>《》【】]+")
 CLAUDE_RESPONSE_TIMEOUT = 240
 TTS_BATCH_TIMEOUT = 0.3
 TTS_BATCH_MAX_CHARS = 150
@@ -89,12 +109,23 @@ BAILIAN_AUDIO_FORMAT = "pcm_24000"
 BAILIAN_SPEECH_RATE = 1.0
 BAILIAN_VOLUME = 50
 BAILIAN_PITCH_RATE = 1.0
+BAILIAN_INSTRUCTION = ""
+BAILIAN_EMOTION_INSTRUCTIONS = {
+    "angry": "你现在很生气，声音带着明显的怒意，语气严厉强势，说话节奏加快。",
+    "sad": "你现在有点低落和难过，声音微微发颤，语气带着淡淡的忧伤，说话缓慢。",
+    "excited": "你现在非常兴奋开心，声音轻快雀跃，音调上扬充满活力。",
+    "teasing": "你现在正在调戏挑逗，声音带着狡黠的笑意，语气轻佻撩人。",
+    "worried": "你现在有点担心和关切，声音温柔中带着紧张，语气小心翼翼。",
+    "loving": "你现在充满疼爱，声音格外温柔绵软，像在哄人一样。",
+    "default": "",
+}
+EMOTION_TAG_RE = re.compile(r"^\s*\[emotion:(\w+)\]\s*(.*)$", re.DOTALL)
 BAILIAN_CALL_TIMEOUT_MS = 30000
 BAILIAN_AUDIO_QUEUE_MAX_CHUNKS = 16
 
 CLAUDE_BIN = "claude"
 CLAUDE_MODEL = "sonnet"
-CLAUDE_FALLBACK_MODEL = "fable"
+CLAUDE_FALLBACK_MODEL = "sonnet"
 VOICE_APPEND_SYSTEM_PROMPT = """
 你正在通过语音和用户对话。默认用低思考、快速短答：先直接回应用户的话，不要铺长篇分析，不要输出思考过程。
 
@@ -104,6 +135,8 @@ VOICE_APPEND_SYSTEM_PROMPT = """
 - 任务或工具请求：可以先直接执行；完成后用短句总结结果
 - 普通闲聊：1-2 小段，必要时自然追问
 - 复杂分析：只有用户明确要求深入时才展开
+
+不要输出 `[emotion:...]` 之类的情绪标签；保持稳定、自然的同一音色。
 
 当用户的问题需要实时信息、搜索、文件/项目上下文、MCP 或 skill 能力时，可以自主调用可用工具完成查询；完成后用适合语音朗读的短句总结。
 只有当收到明确表达「好好想想」「认真分析」「详细讲讲」等意思时，才展开更完整的分析。
