@@ -15,7 +15,9 @@ AUDIO_INPUT_DEVICE = None
 
 PROB_THRESHOLD = 0.4
 DB_THRESHOLD = 64
-REQUIRE_PROB_AND_DB = True
+# 只看 silero 的语音概率：实测本机耳麦音量偏低（说话只有 ~47dB，门槛 64），
+# "概率+音量"双门槛会把正常人声整个挡掉。噪音由 prob 自己挡。
+REQUIRE_PROB_AND_DB = False
 NOISE_FLOOR_INITIAL_DB = 58.0
 NOISE_FLOOR_ALPHA = 0.95
 SPEECH_DB_MARGIN = 3.0
@@ -71,6 +73,8 @@ VOICE_MODE = "ptt"
 PTT_HOTKEY = "F9"
 # 蜂鸣提示：按下（起录）一声，松开（提交）不响。
 PTT_BEEP = True
+# 免提模式里"我已经听到你说的这一段了"的提示音（否则要等 10s+ 才知道有没有收到）
+HANDSFREE_CUE = True
 
 # 免提模式需要 torch + silero-vad；只用 PTT 时可以不装（VAD 懒加载）。
 
@@ -239,9 +243,11 @@ BAILIAN_CALL_TIMEOUT_MS = 30000
 BAILIAN_AUDIO_QUEUE_MAX_CHUNKS = 16
 
 BARGE_IN_ENABLED = True
+# 朗读刚开始这段不判定打断：外放/耳机漏音会把自己的声音当成插话，一开口就被自己掐断
+BARGE_IN_GUARD_SECONDS = 0.4
 BARGE_IN_PROB_THRESHOLD = 0.65
-BARGE_IN_DB_THRESHOLD = 72
-BARGE_IN_REQUIRED_HITS = 4
+BARGE_IN_DB_THRESHOLD = 50   # 本机麦克风偏小声，72 会导致完全打断不了
+BARGE_IN_REQUIRED_HITS = 3
 BARGE_IN_REQUIRED_MISSES = 18
 BARGE_IN_MIN_SPEECH_DURATION = 0.25
 BARGE_IN_TRIGGER_BUFFER_CHUNKS = 16

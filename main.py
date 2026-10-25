@@ -454,6 +454,17 @@ class MiruVoiceApp:
             for segment in segments:
                 await self.handle_segment(segment)
 
+    async def cue(self, kind: str) -> None:
+        if not config.HANDSFREE_CUE or not config.IS_WINDOWS:
+            return
+        try:
+            import winsound
+
+            alias = "SystemAsterisk" if kind == "heard" else "SystemHand"
+            winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except Exception:  # noqa: BLE001
+            pass
+
     async def handle_segment(self, pcm: bytes) -> None:
         next_pcm: Optional[bytes] = pcm
         while next_pcm is not None:
@@ -469,6 +480,8 @@ class MiruVoiceApp:
 
     async def handle_single_segment(self, pcm: bytes) -> Optional[bytes]:
         conversation_id = self.conversation_id
+        print(f"[turn] 收到一段 {len(pcm)/2/config.SAMPLE_RATE:.1f}s，开始识别", flush=True)
+        await self.cue("heard")
         self.audio.stop()
         self.drain_audio_queue()
         self.reset_vad()
@@ -663,10 +676,12 @@ class MiruVoiceApp:
         self.configure_barge_vad_for_detection()
         self.drain_audio_queue()
         self.audio.resume()
+        print("[play] 开始朗读（免提，监听是否被打断）", flush=True)
         tts_task = asyncio.create_task(play())
         interrupted = False
         trigger_chunks: deque[np.ndarray] = deque(maxlen=config.BARGE_IN_TRIGGER_BUFFER_CHUNKS)
         hit_count = 0
+        play_started_at = asyncio.get_running_loop().time()
 
         try:
             while not tts_task.done():
@@ -676,6 +691,11 @@ class MiruVoiceApp:
                     continue
 
                 trigger_chunks.append(chunk)
+                if (
+                    asyncio.get_running_loop().time() - play_started_at < config.BARGE_IN_GUARD_SECONDS
+                ):
+                    hit_count = 0
+                    continue
                 if self.is_barge_in_chunk(chunk):
                     hit_count += 1
                 else:
@@ -683,6 +703,12 @@ class MiruVoiceApp:
 
                 if hit_count >= config.BARGE_IN_REQUIRED_HITS:
                     interrupted = True
+                    print(
+                        f"[play] 被打断：prob={self.barge_vad.last_prob:.2f} "
+                        f"db={self.barge_vad.last_db:.1f}（阈值 {config.BARGE_IN_PROB_THRESHOLD}/"
+                        f"{config.BARGE_IN_DB_THRESHOLD}）",
+                        flush=True,
+                    )
                     self.tts.stop()
                     break
 
@@ -693,6 +719,7 @@ class MiruVoiceApp:
                 self.audio.stop()
 
         if not interrupted:
+            print("[play] 朗读结束", flush=True)
             self.drain_audio_queue()
             self.reset_vad()
             return None
@@ -979,6 +1006,42 @@ async def run_selftest(app: "MiruVoiceApp", wav_path: str) -> int:
     return 0
 
 
+async def run_miccheck(seconds: float) -> int:
+    """录一段，报告音量与 VAD 概率 —— 用来判断"到底有没有收到人声"。"""
+    chunks: list[np.ndarray] = []
+
+    def collect(chunk: np.ndarray) -> None:
+        if len(chunks) < 100000:
+            chunks.append(chunk.copy())
+
+    capture = AudioCapture()
+    capture.set_callback(collect)
+    capture.start()
+    print(f"请对着麦克风连续说话 {seconds:.0f} 秒 ...", flush=True)
+    await asyncio.sleep(seconds)
+    capture.close()
+
+    audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+    if audio.size == 0:
+        print("没采到任何数据：麦克风没打开")
+        return 1
+    peak = float(np.abs(audio).max())
+    rms = float(np.sqrt(float(np.mean(np.square(audio)))))
+    print(f"麦克风：{capture.input_name}  采集 {audio.size / config.SAMPLE_RATE:.1f}s")
+    print(f"峰值 {peak:.4f} | RMS {rms:.5f} | 音量 {dbfs(audio):.1f} dB（判定阈值 {config.DB_THRESHOLD}）")
+    print("-> " + ("有声音 ✔" if peak > 0.02 else "几乎静音 ✘（检查耳机静音键 / 系统输入音量 / 换设备）"))
+    try:
+        vad = VADEngine()
+        probs = [
+            vad.speech_score(audio[i : i + config.BLOCK_SIZE])[0]
+            for i in range(0, max(1, audio.size - config.BLOCK_SIZE), config.BLOCK_SIZE)
+        ]
+        print(f"VAD 最大 prob {max(probs):.2f}（判定阈值 {config.PROB_THRESHOLD}）")
+    except Exception as exc:  # noqa: BLE001
+        print(f"VAD 不可用（免提模式会退回按键）：{type(exc).__name__}: {exc}")
+    return 0
+
+
 def print_devices() -> None:
     import sounddevice as sd
 
@@ -1047,6 +1110,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--selftest", metavar="WAV", default=None, help="跑一遍 ASR → pi → TTS 自检后退出")
     parser.add_argument("--list-devices", action="store_true", help="列出可用音频输入设备")
+    parser.add_argument("--miccheck", type=float, nargs="?", const=5.0, default=None,
+                        metavar="SECONDS", help="录一段并报告音量/VAD 概率（默认 5 秒）")
     parser.add_argument("--check", action="store_true", help="检查依赖、模型、音色、麦克风")
     parser.add_argument("--no-hotkey", action="store_true", help="本次不启用全局热键")
     parser.add_argument("--mode", choices=["ptt", "handsfree"], default=None,
@@ -1059,6 +1124,8 @@ async def amain() -> None:
     if args.list_devices:
         print_devices()
         return
+    if args.miccheck:
+        raise SystemExit(await run_miccheck(args.miccheck))
     if args.check:
         raise SystemExit(print_check())
     app = MiruVoiceApp(args.host, args.port, args.verbose, args.mode or config.VOICE_MODE)

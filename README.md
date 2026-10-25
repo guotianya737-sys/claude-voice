@@ -40,6 +40,15 @@ voiceoff --force      :: pid 丢了或端口被别人占着时强杀
 - `handsfree`：不用按键，VAD 自动判断你说完没有；朗读中按一下 **F9** = 打断。
   需要 `silero-vad`（已在 requirements）。⚠️ 用外放会互相触发，建议戴耳机。
 
+免提收不到反应时，按这个顺序查：
+
+1. `run.bat --miccheck 5`，对着麦克风说话 —— 看"有声音 ✔ / 几乎静音 ✘"。
+   本机耳麦实测只有 **~47 dB**，所以 `REQUIRE_PROB_AND_DB=False`（只看 silero 概率，不卡音量）。
+   如果你换了更小声的麦克风还是不行，把 `DB_THRESHOLD` 往下调，或保持只信概率。
+2. 看 `voicestatus` 的日志尾巴：出现 `[turn] 收到一段 …` 说明 VAD 收到了；
+   出现 `[asr] '…'` 说明识别到了；`[play] 开始朗读 / 朗读结束` 说明确实放了。
+3. 一轮要 **15–20 秒**（pi 思考 ~10s + 本地 TTS RTF≈0.85）。嫌慢就把 `TTS_PROVIDER` 换成 `"bailian"`（首音 0.6s）。
+
 三条命令装在 `%USERPROFILE%\bin`（已在 PATH，cmd 和 PowerShell 通用），
 实现在 `ctl.py`；PowerShell 里还会顺带设置会话级环境变量 `PI_VOICE_ON=1` / `PI_VOICE_URL`（`voiceoff` 时清掉），脚本可以用它判断在不在跑。
 
@@ -62,6 +71,7 @@ run.bat --check                       :: 依赖 / 模型 / 音色 / 麦克风 �
 run.bat --list-devices                :: 列出输入设备（想固定麦克风时用序号填 config.AUDIO_INPUT_DEVICE）
 run.bat --selftest <某个.wav>          :: 不用麦克风，跑一遍 ASR -> pi -> TTS 全链路
 run.bat --no-hotkey                   :: 本次不启用全局热键
+run.bat --miccheck 5                  :: 录 5 秒，报告音量/VAD 概率（判"到底有没有收到人声"）
 ```
 
 ## 配置
