@@ -187,7 +187,7 @@ INDEXTTS_HEALTH_TIMEOUT = 2.0
 TTS_FALLBACK_CHAIN = ("indextts", "bailian", "sapi")
 # 语音回复是否允许带 [emotion:...] 标签（IndexTTS 会按情绪演；百炼/ SAPI 会忽略）
 VOICE_EMOTION_TAGS = True
-VOICE_EMOTION_CHOICES = "happy, excited, teasing, loving, worried, sad, angry"
+VOICE_EMOTION_CHOICES = "happy, sweet, excited, teasing, loving, worried, sad, angry"
 
 TTS_CONFIG_FILE = BASE_DIR / "tts_config.local.json"
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/audio/speech"
