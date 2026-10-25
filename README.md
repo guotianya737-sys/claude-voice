@@ -25,11 +25,20 @@ Windows 上的语音 I/O 前端，把 [claude-voice](https://github.com/guotiany
 **后台常驻（推荐，关掉终端也不停）：**
 
 ```bat
-voiceon          :: 启动（已在跑就只报状态并打开页面）
-voicestatus      :: 看 PID / 端口 / 日志尾巴
-voiceoff         :: 停止
-voiceoff --force :: pid 文件丢了、或端口被别人占着时强杀端口持有者
+voiceon               :: 启动（沿用上次的说话模式；已在跑就只报状态）
+voiceon ptt           :: 按键说话：按住 F9 说，松开发送
+voiceon handsfree     :: 免提常听：一直听着，说完自动断句接话
+voicestatus           :: 看 模式 / PID / 端口 / 日志尾巴
+voiceoff              :: 停止（TTS 服务一起停）
+voiceoff --force      :: pid 丢了或端口被别人占着时强杀
 ```
+
+模式会记在 `%LOCALAPPDATA%\pi-voice\mode`，下次 `voiceon` 不带参数就沿用；
+**切换模式会自动重启服务**（说的和听的都换掉）。也可以在网页上点「免提模式 / 按讲模式」临时切。
+
+- `ptt`：按住 **F9** 说话，松开发送；朗读中按住 F9 = 打断。
+- `handsfree`：不用按键，VAD 自动判断你说完没有；朗读中按一下 **F9** = 打断。
+  需要 `silero-vad`（已在 requirements）。⚠️ 用外放会互相触发，建议戴耳机。
 
 三条命令装在 `%USERPROFILE%\bin`（已在 PATH，cmd 和 PowerShell 通用），
 实现在 `ctl.py`；PowerShell 里还会顺带设置会话级环境变量 `PI_VOICE_ON=1` / `PI_VOICE_URL`（`voiceoff` 时清掉），脚本可以用它判断在不在跑。

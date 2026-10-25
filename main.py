@@ -264,11 +264,11 @@ class StreamingReplySpeaker:
 
 
 class MiruVoiceApp:
-    def __init__(self, host: str, port: int, verbose: bool = False) -> None:
+    def __init__(self, host: str, port: int, verbose: bool = False, mode: str = "ptt") -> None:
         self.host = host
         self.port = port
         self.verbose = verbose
-        self.mode = Mode.PTT
+        self.mode = Mode.HANDSFREE if str(mode).lower() == "handsfree" else Mode.PTT
         self.status = Status.IDLE
         self.audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=config.AUDIO_QUEUE_MAX_CHUNKS)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -302,6 +302,15 @@ class MiruVoiceApp:
         self.audio.stop()
         await self.set_status(Status.IDLE)
         self.start_hotkey()
+        if self.mode == Mode.HANDSFREE:
+            try:
+                self._ensure_vad()
+                self.audio.resume()
+                await self.set_status(Status.LISTENING)
+            except RuntimeError as exc:
+                print(f"handsfree unavailable, falling back to ptt: {exc}")
+                self.mode = Mode.PTT
+                self.audio.stop()
         self.print_banner()
         await self.closed.wait()
         processor.cancel()
@@ -863,12 +872,15 @@ class MiruVoiceApp:
             self.hotkey = None
 
     def print_banner(self) -> None:
+        mode_text = "免提常听（VAD 自动断句）" if self.mode == Mode.HANDSFREE else "按键说话"
         lines = [
-            f"pi-voice 已启动：http://{self.host}:{self.port}/",
+            f"pi-voice 已启动：http://{self.host}:{self.port}/  [模式：{mode_text}]",
             f"麦克风：{self.audio.input_name}",
             f"TTS：{self.tts.provider}" + self._tts_detail(),
         ]
-        if self.hotkey is not None:
+        if self.mode == Mode.HANDSFREE:
+            lines.append("一直听着，说完会自动接话；朗读中按 F9 = 打断")
+        elif self.hotkey is not None:
             lines.append(f"按住 [{self.hotkey.describe()}] 说话，松开就发出去；说话中途按住可以打断")
         print("\n".join(lines))
 
@@ -881,6 +893,11 @@ class MiruVoiceApp:
         return f"（{self.tts.bailian.model}/{self.tts.bailian.voice}）"
 
     async def ptt_press(self) -> None:
+        if self.mode == Mode.HANDSFREE:
+            # 常听模式下热键没意义，按一下当"打断"
+            if self.status == Status.SPEAKING:
+                self.tts.stop()
+            return
         if config.PTT_BEEP and config.IS_WINDOWS:
             with contextlib.suppress(Exception):
                 import winsound
@@ -889,6 +906,8 @@ class MiruVoiceApp:
         await self.handle_command({"type": "push_to_talk_start"})
 
     async def ptt_release(self) -> None:
+        if self.mode == Mode.HANDSFREE:
+            return
         await self.handle_command({"type": "push_to_talk_end"})
 
     async def on_pi_event(self, kind: str, record: dict) -> None:
@@ -1030,6 +1049,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list-devices", action="store_true", help="列出可用音频输入设备")
     parser.add_argument("--check", action="store_true", help="检查依赖、模型、音色、麦克风")
     parser.add_argument("--no-hotkey", action="store_true", help="本次不启用全局热键")
+    parser.add_argument("--mode", choices=["ptt", "handsfree"], default=None,
+                        help="ptt=按住说话；handsfree=一直聆听自动断句（需要 torch + silero-vad）")
     return parser.parse_args()
 
 
@@ -1040,7 +1061,7 @@ async def amain() -> None:
         return
     if args.check:
         raise SystemExit(print_check())
-    app = MiruVoiceApp(args.host, args.port, args.verbose)
+    app = MiruVoiceApp(args.host, args.port, args.verbose, args.mode or config.VOICE_MODE)
     if args.no_hotkey:
         app.start_hotkey = lambda: None  # type: ignore[method-assign]
     loop = asyncio.get_running_loop()

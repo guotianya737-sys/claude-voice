@@ -24,6 +24,7 @@ PROJ = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "pi-voice"
 PID_FILE = STATE_DIR / "pid"
 TTS_PID_FILE = STATE_DIR / "indextts.pid"
+MODE_FILE = STATE_DIR / "mode"
 LOG_FILE = STATE_DIR / "server.log"
 ERR_FILE = STATE_DIR / "server.err.log"
 TTS_LOG_FILE = STATE_DIR / "indextts.log"
@@ -124,6 +125,45 @@ def is_our_process(pid: int) -> bool:
     return "main.py" in haystack and str(PROJ).lower() in haystack
 
 
+def read_mode() -> str:
+    try:
+        value = MODE_FILE.read_text(encoding="ascii").strip().lower()
+    except OSError:
+        return "ptt"
+    return value if value in {"ptt", "handsfree"} else "ptt"
+
+
+def write_mode(mode: str) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    MODE_FILE.write_text(mode, encoding="ascii")
+
+
+def parse_mode(args: list[str]) -> tuple[str, list[str]]:
+    """从参数里抠出模式：支持 --mode handsfree / 裸 handsfree。"""
+    mode = None
+    rest: list[str] = []
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item == "--mode" and index + 1 < len(args):
+            mode = args[index + 1].lower()
+            index += 2
+            continue
+        if item.startswith("--mode="):
+            mode = item.split("=", 1)[1].lower()
+            index += 1
+            continue
+        if item.lower() in {"ptt", "handsfree", "按键", "免提", "常听"}:
+            mode = "ptt" if item.lower() in {"ptt", "按键"} else "handsfree"
+            index += 1
+            continue
+        rest.append(item)
+        index += 1
+    if mode not in {"ptt", "handsfree"}:
+        mode = read_mode()
+    return mode, rest
+
+
 def read_pid() -> int | None:
     try:
         return int(PID_FILE.read_text(encoding="ascii").strip())
@@ -161,22 +201,29 @@ def cmd_start(args: list[str]) -> int:
     port = server_port()
     url = f"http://localhost:{port}/"
     open_browser = "--open" in args
-    extra = [item for item in args if item not in {"--open", "--no-open"}]
+    requested_mode, extra = parse_mode([item for item in args if item not in {"--open", "--no-open"}])
+    running_mode = read_mode()
 
     if is_listening(port):
         owner = port_owner(port)
         if owner and read_pid() != owner and (pid_alive(owner) and is_our_process(owner)):
             write_pid(owner)
         if owner and read_pid() == owner:
-            print(f"[pi-voice] already running (pid {owner}) - {url}")
-            if open_browser:
-                _open(url)
-            return 0
-        print(f"[pi-voice] port {port} is held by another process (pid {owner}); run: voiceoff --force")
-        return 1
+            if requested_mode == running_mode:
+                label = "免提常听" if running_mode == "handsfree" else "按键说话"
+                print(f"[pi-voice] already running (pid {owner}, {label}) - {url}")
+                if open_browser:
+                    _open(url)
+                return 0
+            print(f"[pi-voice] 切换模式 -> {requested_mode}，重启服务…")
+            cmd_stop([])
+        else:
+            print(f"[pi-voice] port {port} is held by another process (pid {owner}); run: voiceoff --force")
+            return 1
 
     start_tts_server()
-
+    write_mode(requested_mode)
+    extra = [*extra, "--mode", requested_mode]
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -207,7 +254,10 @@ def cmd_start(args: list[str]) -> int:
             return 1
         if is_listening(port):
             print(f"[pi-voice] ON  pid={proc.pid}  {url}")
-            print(f"[pi-voice] hold F9 to talk; logs: {LOG_FILE}")
+            if requested_mode == "handsfree":
+                print(f"[pi-voice] 一直聆听中（说完自动接话，F9=打断）；logs: {LOG_FILE}")
+            else:
+                print(f"[pi-voice] hold F9 to talk; logs: {LOG_FILE}")
             if open_browser:
                 _open(url)
             return 0
@@ -268,6 +318,8 @@ def cmd_status(args: list[str]) -> int:
     if not alive and listening:
         owner = port_owner(port)
         print(f"  port owned by pid {owner} (pid file stale; voiceoff will adopt it)")
+    mode = read_mode()
+    print(f"  mode     : {mode}" + ("（免提常听）" if mode == "handsfree" else "（按键说话）"))
     print(f"  url      : http://localhost:{port}/ -> {'listening' if listening else 'no listener'}")
     tts_up = tts_listening()
     print(f"  indextts : :{TTS_PORT} -> {'listening' if tts_up else 'no listener'}"

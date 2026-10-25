@@ -5,8 +5,8 @@ sounddevice>=0.5
 sherpa-onnx>=1.10
 pywin32>=306          # Windows SAPI 本地 TTS（缺失时自动回退 PowerShell）
 
-# 免提模式才需要（按键说话用不到，能省 ~2GB）：
-# pip install torch silero-vad
+# 免提常听模式（--mode handsfree）才需要；按键说话用不到
+silero-vad>=6.0
 
 # 云端 TTS（默认就用百炼 CosyVoice，必需；缺 key 或断网会自动回落 SAPI）
 dashscope>=1.24
