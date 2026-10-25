@@ -95,7 +95,8 @@ VOICE_APPEND_SYSTEM_PROMPT = """
 - 复杂分析：只有用户明确要求深入时才展开
 
 语音朗读约束：不要输出表格、代码块、URL 原文、markdown 装饰；数字和单位用口语表达。
-不要输出 `[emotion:...]` 之类的情绪标签。
+如果这一轮的情绪很明显（开心、撒娇、担心、难过、兴奋），可以在回复的**第一行**单独写一个情绪标签，
+格式 `[emotion:happy]`（可选值：{emotions}），标签之后换行再写正文；没有明显情绪就不要写。
 
 需要实时信息、文件/项目上下文、MCP 或 skill 能力时，可以自主调用工具，完成后用适合朗读的短句总结。
 """.strip()
@@ -158,10 +159,11 @@ ASR_NUM_THREADS = 4
 # ---------------------------------------------------------------------------
 # TTS
 # ---------------------------------------------------------------------------
+# indextts = 本地 IndexTTS-2.5（9070XT/ROCm，能演情绪+克隆音色；需先起独立服务）
 # bailian = 百炼 CosyVoice（云端流式，自然度最好，首音 ~0.6s；断网自动回落 SAPI）
 # sapi = Windows 本地 SAPI（离线、即时，但机械）
 # siliconflow / siliconflow_moss = 硅基流动（需自己的 key）
-TTS_PROVIDER = "bailian"
+TTS_PROVIDER = "indextts"
 
 # SAPI 音色。留空 = 自动挑第一个中文音色；也可以是 "Microsoft Huihui Desktop" 等完整名。
 SAPI_VOICE = ""
@@ -169,6 +171,23 @@ SAPI_VOICE = ""
 SAPI_RATE = 0
 # SAPI 音量 0..100
 SAPI_VOLUME = 100
+
+# 本地 IndexTTS 服务（index-tts 项目的 indextts_server.py）
+INDEXTTS_URL = "http://127.0.0.1:12395"
+INDEXTTS_TIMEOUT = 120
+INDEXTTS_CHUNK_MIN_CHARS = 8
+INDEXTTS_CHUNK_MAX_CHARS = 24
+# True = 整段一次合成（连续无接缝，但首音=2.5s+0.9×音频长度）
+# False = 小段快发（首音低，但本地模型 RTF≈1 时会出现静音缝）
+INDEXTTS_SINGLE_REQUEST = True
+INDEXTTS_FIRST_CHUNK_MAX_CHARS = 12
+INDEXTTS_FIRST_CHUNK_MIN_CHARS = 4
+INDEXTTS_HEALTH_TIMEOUT = 2.0
+# 本地→云端→SAPI 的回退顺序（前面的不可用就顺延）
+TTS_FALLBACK_CHAIN = ("indextts", "bailian", "sapi")
+# 语音回复是否允许带 [emotion:...] 标签（IndexTTS 会按情绪演；百炼/ SAPI 会忽略）
+VOICE_EMOTION_TAGS = True
+VOICE_EMOTION_CHOICES = "happy, excited, teasing, loving, worried, sad, angry"
 
 TTS_CONFIG_FILE = BASE_DIR / "tts_config.local.json"
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/audio/speech"
@@ -227,3 +246,15 @@ BARGE_IN_CAPTURE_REQUIRED_MISSES = 40
 BARGE_IN_MAX_CAPTURE_SECONDS = 30.0
 
 IS_WINDOWS = sys.platform == "win32"
+EMOTION_PROMPT_PARAGRAPH = (
+    "如果这一轮的情绪很明显（开心、撒娇、担心、难过、兴奋），可以在回复的**第一行**单独写一个情绪标签，\n"
+    "格式 `[emotion:happy]`（可选值：{emotions}），标签之后换行再写正文；没有明显情绪就不要写。\n"
+)
+if VOICE_EMOTION_TAGS:
+    VOICE_APPEND_SYSTEM_PROMPT = VOICE_APPEND_SYSTEM_PROMPT.replace(
+        EMOTION_PROMPT_PARAGRAPH, EMOTION_PROMPT_PARAGRAPH.replace("{emotions}", VOICE_EMOTION_CHOICES)
+    )
+else:
+    VOICE_APPEND_SYSTEM_PROMPT = VOICE_APPEND_SYSTEM_PROMPT.replace(
+        EMOTION_PROMPT_PARAGRAPH, "不要输出 `[emotion:...]` 之类的情绪标签。\n"
+    )

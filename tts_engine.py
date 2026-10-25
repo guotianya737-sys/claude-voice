@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 import wave
 from dataclasses import dataclass
@@ -31,9 +32,108 @@ class PreparedSpeech:
     audio_path: Optional[Path] = None
 
 
+class IndexTTSTTS:
+    """本地 IndexTTS-2.5（独立进程，HTTP 调用）：能演情绪、能克隆音色。
+
+    pi-voice 跑 Python 3.12，IndexTTS 要 3.11 + ROCm torch，所以拆成常驻服务
+    （index-tts/indextts_server.py），这里只做请求 + 落盘 + 播放。
+    """
+
+    provider = "indextts"
+
+    def __init__(self, base_url: str = config.INDEXTTS_URL, timeout: float = config.INDEXTTS_TIMEOUT) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self._stop_requested = threading.Event()
+        self._emotion: Optional[str] = None
+        self._healthy_until = 0.0
+        self._healthy = False
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def set_emotion(self, emotion: str) -> None:
+        self._emotion = None if emotion in {None, "", "default", "none"} else emotion
+
+    def can_prefetch(self) -> bool:
+        return self.available()
+
+    def available(self) -> bool:
+        now = time.time()
+        if now < self._healthy_until:
+            return self._healthy
+        healthy = False
+        try:
+            request = urllib.request.Request(f"{self.base_url}/health")
+            with self._opener.open(request, timeout=config.INDEXTTS_HEALTH_TIMEOUT) as response:
+                healthy = response.status == 200
+        except Exception:  # noqa: BLE001 - 服务没起就是不可用
+            healthy = False
+        self._healthy = healthy
+        self._healthy_until = now + (10.0 if healthy else 5.0)
+        return healthy
+
+    @property
+    def configured(self) -> bool:
+        return self.available()
+
+    async def prepare(self, text: str) -> Optional[PreparedSpeech]:
+        text = text.strip()
+        if not text or not self.available():
+            return None
+        self._stop_requested.clear()
+        try:
+            payload = {"text": text, "emotion": self._emotion, "emo_alpha": 0.85}
+            audio = await asyncio.to_thread(self._request_audio, payload)
+        except Exception as exc:  # noqa: BLE001
+            print(f"indextts failed: {type(exc).__name__}: {exc}")
+            self._healthy_until = 0.0
+            return None
+        if not audio:
+            return None
+        path = Path(tempfile.gettempdir()) / f"pi-voice-idx-{uuid.uuid4().hex}.wav"
+        path.write_bytes(audio)
+        return PreparedSpeech(provider=self.provider, text=text, audio_path=path)
+
+    async def play_prepared(self, prepared: PreparedSpeech) -> bool:
+        if prepared.audio_path is None:
+            return False
+        try:
+            await asyncio.to_thread(_play_audio_file, prepared.audio_path, self._stop_requested)
+            return True
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                prepared.audio_path.unlink()
+
+    async def speak(self, text: str) -> bool:
+        prepared = await self.prepare(text)
+        if prepared is None:
+            return False
+        return await self.play_prepared(prepared)
+
+    def stop(self) -> None:
+        self._stop_requested.set()
+
+    def _request_audio(self, payload: dict) -> bytes:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        started = time.time()
+        request = urllib.request.Request(
+            f"{self.base_url}/tts",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with self._opener.open(request, timeout=self.timeout) as response:
+            data = response.read()
+        if not data or data[:4] != b"RIFF":
+            raise RuntimeError(f"非 wav 响应: {data[:120]!r}")
+        frames = max(1, (len(data) - 44) // 2)
+        print(f"[indextts] {len(payload['text'])}字 {time.time() - started:.2f}s -> {frames / 22050:.2f}s 音频")
+        return data
+
+
 class TTSEngine:
     def __init__(self, provider: str = config.TTS_PROVIDER) -> None:
         self.provider = provider
+        self.emotion: Optional[str] = None
+        self.indextts = IndexTTSTTS()
         self.sapi = SapiTTS()
         self.siliconflow = SiliconFlowTTS.from_config("siliconflow")
         self.siliconflow_moss = SiliconFlowTTS.from_config("siliconflow_moss")
@@ -41,45 +141,61 @@ class TTSEngine:
 
     async def speak(self, text: str) -> None:
         text = normalize_for_tts(text)
-        if not text:
+        if not text or not text.strip():
             return
-        text = text.strip()
-        if not text:
-            return
-        cloud_tts = self._cloud_tts()
-        if cloud_tts is not None:
-            ok = await cloud_tts.speak(text)
-            if ok:
-                return
-        await self.sapi.speak(text)
+        for provider in self._chain():
+            impl = self._provider_tts(provider)
+            if impl is None:
+                continue
+            try:
+                if await impl.speak(text.strip()):
+                    if provider != self.provider:
+                        print(f"tts fell back to {provider}")
+                    return
+            except Exception as exc:  # noqa: BLE001 - 一个后端挂了换下一个
+                print(f"tts {provider} failed: {type(exc).__name__}: {exc}")
+        print("tts: 所有后端都失败了")
 
     def can_prefetch(self) -> bool:
-        cloud_tts = self._cloud_tts()
-        if hasattr(cloud_tts, "can_prefetch"):
-            return bool(cloud_tts.can_prefetch())
-        return cloud_tts is not None and cloud_tts.configured
+        impl = self._provider_tts(self.provider)
+        if impl is not None and hasattr(impl, "can_prefetch"):
+            try:
+                return bool(impl.can_prefetch())
+            except Exception:  # noqa: BLE001
+                return False
+        return False
 
     async def prepare(self, text: str) -> Optional[PreparedSpeech]:
         text = normalize_for_tts(text)
-        if not text:
+        if not text or not text.strip():
             return None
-        text = text.strip()
-        if not text:
-            return None
-        cloud_tts = self._cloud_tts()
-        if cloud_tts is not None:
-            prepared = await cloud_tts.prepare(text)
+        for provider in self._chain():
+            impl = self._provider_tts(provider)
+            if impl is None:
+                continue
+            try:
+                prepared = await self._prepare_with(provider, impl, text.strip())
+            except Exception as exc:  # noqa: BLE001
+                print(f"tts {provider} prepare failed: {type(exc).__name__}: {exc}")
+                continue
             if prepared is not None:
                 return prepared
-        return PreparedSpeech(provider="sapi", text=text)
+        return PreparedSpeech(provider="sapi", text=text.strip())
 
     async def play_prepared(self, prepared: PreparedSpeech) -> None:
-        cloud_tts = self._provider_tts(prepared.provider)
-        if cloud_tts is not None and prepared.audio_path is not None:
-            ok = await cloud_tts.play_prepared(prepared)
-            if ok:
-                return
+        impl = self._provider_tts(prepared.provider)
+        if impl is not None and prepared.audio_path is not None:
+            try:
+                if await impl.play_prepared(prepared):
+                    return
+            except Exception as exc:  # noqa: BLE001
+                print(f"tts {prepared.provider} playback failed: {type(exc).__name__}: {exc}")
         await self.sapi.speak(prepared.text)
+
+    async def _prepare_with(self, provider: str, impl, text: str) -> Optional[PreparedSpeech]:
+        if provider == "indextts":
+            return await impl.prepare(text)
+        return await impl.prepare(text)
 
     def discard_prepared(self, prepared: PreparedSpeech) -> None:
         if prepared.audio_path is not None:
@@ -87,21 +203,37 @@ class TTSEngine:
                 prepared.audio_path.unlink()
 
     def stop(self) -> None:
+        self.indextts.stop()
         self.sapi.stop()
         self.siliconflow.stop()
         self.siliconflow_moss.stop()
         self.bailian.stop()
 
+    def set_emotion(self, emotion: str) -> None:
+        self.emotion = None if emotion in {None, "", "default", "none"} else emotion
+        self.indextts.set_emotion(emotion or "")
+        self.bailian.set_emotion(emotion or "")
+
+    def clear_emotion(self) -> None:
+        self.emotion = None
+        self.bailian.clear_emotion()
+
     def set_provider(self, provider: str) -> None:
-        if provider not in {"sapi", "siliconflow", "siliconflow_moss", "bailian"}:
+        if provider not in {"indextts", "sapi", "siliconflow", "siliconflow_moss", "bailian"}:
             return
         self.stop()
         self.provider = provider
 
-    def _cloud_tts(self):
-        return self._provider_tts(self.provider)
+    def _chain(self) -> list[str]:
+        order = [self.provider]
+        for candidate in config.TTS_FALLBACK_CHAIN:
+            if candidate not in order:
+                order.append(candidate)
+        return order
 
     def _provider_tts(self, provider: str):
+        if provider == "indextts":
+            return self.indextts
         if provider == "sapi":
             return self.sapi
         if provider == "siliconflow":

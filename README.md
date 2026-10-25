@@ -76,6 +76,32 @@ run.bat --no-hotkey                   :: 本次不启用全局热键
 
 ### 语音（谁在说话）
 
+**默认：本地 IndexTTS-2.5**（`TTS_PROVIDER="indextts"`）——声音更自然，而且能用 7 种情绪演。
+它跑在独立进程里（`~/index-tts/indextts_server.py`，:12395），`voiceon` 会把两个服务一起拉起：
+
+```
+voiceon    → ① IndexTTS 服务（加载约 40s，之后常驻） ② pi-voice
+voiceoff   → 两个一起停
+```
+
+实测（RX 9070 XT / ROCm）：**RTF ≈ 0.85–1.0**（5 秒音频约 4.5–5 秒生成），
+每个请求另有 ~2.5s 固定开销，所以**首音 ≈ 2.5s + 0.85×时长**；45 字回复约 7.4s 生成 8.5s 音频。
+代价是比云端慢，收益是情感和音色克隆。想换回快的：`TTS_PROVIDER="bailian"`（首音 0.6s）。
+
+音色参考是 `~/index-tts/voices/miru_ref_cosyvoice.wav`（用云端 longanli_v3 生成的一段中性御姐音），
+换声音只要换这个文件并重启服务。
+
+**分档策略**：`INDEXTTS_SINGLE_REQUEST=True` 整段一次合成（连续无接缝）。
+本地 RTF≈1 时切成多段反而会出现静音缝（生成第 2 段时第 1 段已播完），所以默认不开分段。
+
+**情绪**：模型回复首行写 `[emotion:teasing]` 这类标签，映射到 IndexTTS 的 8 维情绪向量
+（happy / excited / teasing / loving / worried / sad / angry）。
+
+**回退链**：`indextts → bailian → sapi`（`config.TTS_FALLBACK_CHAIN`）。
+本地服务没起来就自动走云端，云端也不通就退回系统语音。
+
+### 云端语音（百炼 CosyVoice）
+
 默认走**百炼 CosyVoice v3-flash / longanli_v3**（云端 WebSocket 流式）。key 的来源优先级：
 
 1. 环境变量 `DASHSCOPE_API_KEY`

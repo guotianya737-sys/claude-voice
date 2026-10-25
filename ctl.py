@@ -23,8 +23,12 @@ from pathlib import Path
 PROJ = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "pi-voice"
 PID_FILE = STATE_DIR / "pid"
+TTS_PID_FILE = STATE_DIR / "indextts.pid"
 LOG_FILE = STATE_DIR / "server.log"
 ERR_FILE = STATE_DIR / "server.err.log"
+TTS_LOG_FILE = STATE_DIR / "indextts.log"
+TTS_PROJ = Path.home() / "index-tts"
+TTS_PORT = 12395
 
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -171,6 +175,8 @@ def cmd_start(args: list[str]) -> int:
         print(f"[pi-voice] port {port} is held by another process (pid {owner}); run: voiceoff --force")
         return 1
 
+    start_tts_server()
+
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -244,10 +250,11 @@ def cmd_stop(args: list[str]) -> int:
             break
         _sleep(0.25)
 
+    tts_stopped = stop_tts_server()
     if is_listening(port):
         print(f"[pi-voice] port {port} is still listening - stop failed")
         return 1
-    print("[pi-voice] OFF" if killed else "[pi-voice] not running")
+    print("[pi-voice] OFF" if (killed or tts_stopped) else "[pi-voice] not running")
     return 0
 
 
@@ -262,6 +269,9 @@ def cmd_status(args: list[str]) -> int:
         owner = port_owner(port)
         print(f"  port owned by pid {owner} (pid file stale; voiceoff will adopt it)")
     print(f"  url      : http://localhost:{port}/ -> {'listening' if listening else 'no listener'}")
+    tts_up = tts_listening()
+    print(f"  indextts : :{TTS_PORT} -> {'listening' if tts_up else 'no listener'}"
+          + ("" if tts_up else "  (声音会回落到云端/SAPI)"))
     print(f"  log      : {LOG_FILE}")
     tail_text = tail(LOG_FILE, 6)
     if tail_text:
@@ -272,6 +282,86 @@ def cmd_status(args: list[str]) -> int:
         print("  -- stderr tail --")
         print("\n".join("  " + line for line in err_text.splitlines()))
     return 0 if (alive or listening) else 3
+
+
+def tts_listening(port: int = TTS_PORT) -> bool:
+    for host, family in (("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.4)
+                sock.connect((host, port))
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def start_tts_server() -> bool:
+    """拉起本地 IndexTTS 服务；失败不致命（pi-voice 会回落云端/SAPI）。"""
+    if tts_listening():
+        print(f"[pi-voice] IndexTTS 已在运行 (:{TTS_PORT})")
+        return True
+    exe = TTS_PROJ / ".venv" / "Scripts" / "python.exe"
+    script = TTS_PROJ / "indextts_server.py"
+    if not exe.exists() or not script.exists():
+        print(f"[pi-voice] 没找到 IndexTTS（{TTS_PROJ}），跳过；声音会走云端")
+        return False
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
+    log = TTS_LOG_FILE.open("wb")
+    try:
+        proc = subprocess.Popen(
+            [str(exe), "-u", script.name, "--port", str(TTS_PORT), "--warmup"],
+            cwd=str(TTS_PROJ),
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+        )
+    finally:
+        log.close()
+    TTS_PID_FILE.write_text(str(proc.pid), encoding="ascii")
+    print(f"[pi-voice] 启动 IndexTTS (pid {proc.pid})，首次加载约 40s ...")
+    for _ in range(180):  # 最多 90s
+        if proc.poll() is not None:
+            print("[pi-voice] IndexTTS 退出了，日志尾巴：")
+            print(tail(TTS_LOG_FILE, 10))
+            TTS_PID_FILE.unlink(missing_ok=True)
+            return False
+        if tts_listening():
+            print(f"[pi-voice] IndexTTS 就绪 (:{TTS_PORT})")
+            return True
+        _sleep(0.5)
+    print("[pi-voice] IndexTTS 90s 内没就绪，先继续（声音会走云端）")
+    return False
+
+
+def stop_tts_server(force: bool = False) -> bool:
+    pid = None
+    try:
+        pid = int(TTS_PID_FILE.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        pid = None
+    stopped = False
+    if pid and pid_alive(pid):
+        kill_tree(pid)
+        stopped = True
+    TTS_PID_FILE.unlink(missing_ok=True)
+    if tts_listening():
+        owner = port_owner(TTS_PORT)
+        if owner:
+            kill_tree(owner)
+            stopped = True
+    for _ in range(40):
+        if not tts_listening():
+            break
+        _sleep(0.25)
+    if stopped:
+        print(f"[pi-voice] IndexTTS 已停止 (:{TTS_PORT})")
+    return stopped
 
 
 def _open(url: str) -> None:

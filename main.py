@@ -49,10 +49,11 @@ class StreamingReplySpeaker:
             self.worker = asyncio.create_task(self._worker())
         self.interrupted_pcm: Optional[bytes] = None
         self.closed = False
+        self._first_chunk_sent = False
         self.displayed_text = ""
         self._emotion_tag_parsed = False
         self._opening_line = ""
-        self.app.tts.bailian.clear_emotion()
+        self.app.tts.clear_emotion()
 
     async def feed(self, token: str) -> None:
         if self.closed or self.interrupted_pcm is not None or self.conversation_id != self.app.conversation_id:
@@ -95,9 +96,9 @@ class StreamingReplySpeaker:
             return line
         emotion = match.group(1).lower()
         if emotion in {"none", "default"}:
-            self.app.tts.bailian.clear_emotion()
+            self.app.tts.clear_emotion()
         else:
-            self.app.tts.bailian.set_emotion(emotion)
+            self.app.tts.set_emotion(emotion)
         return match.group(2).lstrip()
 
     def _opening_may_be_emotion_tag(self) -> bool:
@@ -156,6 +157,10 @@ class StreamingReplySpeaker:
         accum = ""
         batch_max = config.TTS_BATCH_MAX_CHARS
         batch_timeout = config.TTS_BATCH_TIMEOUT
+        if self.app.tts.provider == "indextts":
+            # 本地模型慢于实时（RTF≈0.9）：不合并段，靠预取把播放垫平
+            batch_max = 1
+            batch_timeout = 0.05
         while True:
             try:
                 chunk = await asyncio.wait_for(self.queue.get(), timeout=batch_timeout)
@@ -177,7 +182,7 @@ class StreamingReplySpeaker:
             if self.interrupted_pcm is not None:
                 continue
             accum += chunk
-            if len(accum) >= batch_max:
+            if len(accum) >= batch_max or batch_max <= 1:
                 prepared = await self.app.tts.prepare(accum)
                 if prepared is not None:
                     await prepared_queue.put(prepared)
@@ -209,13 +214,26 @@ class StreamingReplySpeaker:
             self.buffer = self.buffer[cut:].lstrip()
             if chunk:
                 chunks.append(chunk)
+                self._first_chunk_sent = True
         return chunks
 
     def _find_cut(self, flush: bool) -> Optional[int]:
         if flush:
             return len(self.buffer)
 
-        if self.app.tts.provider == "bailian":
+        if self.app.tts.provider == "indextts" and config.INDEXTTS_SINGLE_REQUEST:
+            # 本地模型 RTF≈1：切成多段必然出现静音缝（生成第2段时第1段已播完），
+            # 所以整段一次合成——延迟高但中途不断。
+            return None
+        if self.app.tts.provider == "indextts":
+            # 第一段尽量短，先把声音放出来；之后放大段减少请求次数
+            if self._first_chunk_sent:
+                max_chars = config.INDEXTTS_CHUNK_MAX_CHARS
+                min_chars = config.INDEXTTS_CHUNK_MIN_CHARS
+            else:
+                max_chars = config.INDEXTTS_FIRST_CHUNK_MAX_CHARS
+                min_chars = config.INDEXTTS_FIRST_CHUNK_MIN_CHARS
+        elif self.app.tts.provider == "bailian":
             if self.app.tts.can_prefetch():
                 max_chars = config.BAILIAN_PREFETCH_TTS_CHUNK_MAX_CHARS
                 min_chars = config.BAILIAN_PREFETCH_TTS_CHUNK_MIN_CHARS
@@ -848,11 +866,19 @@ class MiruVoiceApp:
         lines = [
             f"pi-voice 已启动：http://{self.host}:{self.port}/",
             f"麦克风：{self.audio.input_name}",
-            f"TTS：{self.tts.provider}" + (f"（{self.tts.sapi.voice or '自动选音色'}）" if self.tts.provider == "sapi" else ""),
+            f"TTS：{self.tts.provider}" + self._tts_detail(),
         ]
         if self.hotkey is not None:
             lines.append(f"按住 [{self.hotkey.describe()}] 说话，松开就发出去；说话中途按住可以打断")
         print("\n".join(lines))
+
+    def _tts_detail(self) -> str:
+        if self.tts.provider == "indextts":
+            state = "已连接" if self.tts.indextts.available() else "未连上（会回落云端/SAPI）"
+            return f"（本地 IndexTTS @ {config.INDEXTTS_URL}，{state}）"
+        if self.tts.provider == "sapi":
+            return f"（{self.tts.sapi.voice or '自动选音色'}）"
+        return f"（{self.tts.bailian.model}/{self.tts.bailian.voice}）"
 
     async def ptt_press(self) -> None:
         if config.PTT_BEEP and config.IS_WINDOWS:
