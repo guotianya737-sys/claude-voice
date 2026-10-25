@@ -408,7 +408,13 @@ class BailianTTS:
 
     @property
     def active_instruction(self) -> Optional[str]:
-        """Return emotion override if set, otherwise the base instruction."""
+        """Return emotion override if set, otherwise the base instruction.
+
+        实测 cosyvoice-v3-flash 不接受 instruction（引擎返回 428），所以默认关闭：
+        关掉时情绪标签被忽略，而不是让整句合成失败、静默降级成 SAPI。
+        """
+        if not getattr(config, "BAILIAN_INSTRUCTION_ENABLED", False):
+            return None
         if self._emotion_instruction is not None:
             return self._emotion_instruction
         return self.instruction or None
@@ -420,6 +426,19 @@ class BailianTTS:
     def clear_emotion(self) -> None:
         self._emotion_instruction = None
 
+    @staticmethod
+    def _pi_auth_key() -> str:
+        """从 ~/.pi/agent/auth.json 取 bailian key —— 复用 pi 已有的凭证，不复制不打印。"""
+        path = Path.home() / ".pi" / "agent" / "auth.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        entry = data.get("bailian")
+        if isinstance(entry, dict):
+            return str(entry.get("key") or entry.get("apiKey") or "")
+        return ""
+
     @classmethod
     def from_config(cls) -> "BailianTTS":
         tts_config = _load_tts_config()
@@ -427,7 +446,9 @@ class BailianTTS:
         if not isinstance(bailian_config, dict):
             bailian_config = {}
         return cls(
-            api_key=os.environ.get(config.BAILIAN_API_KEY_ENV, bailian_config.get("api_key", "")),
+            api_key=os.environ.get(config.BAILIAN_API_KEY_ENV)
+            or str(bailian_config.get("api_key", ""))
+            or cls._pi_auth_key(),
             websocket_api_url=bailian_config.get("websocket_api_url", config.BAILIAN_WEBSOCKET_API_URL),
             http_api_url=bailian_config.get("http_api_url", config.BAILIAN_HTTP_API_URL),
             qwen_realtime_websocket_api_url=bailian_config.get(
@@ -446,6 +467,8 @@ class BailianTTS:
     def _ensure_dashscope(self) -> None:
         if self._dashscope_configured:
             return
+        # 代理只该走 LLM 的 HTTP，不该拖住 TTS 的 WebSocket：实测带代理首音 5.5s，直连 0.57s
+        _bypass_proxy_for_dashscope()
         import dashscope
 
         dashscope.api_key = self.api_key
@@ -833,6 +856,16 @@ def _play_audio_file(audio_path: Path, stop_event: Optional[threading.Event] = N
                 stream.stop()
             with contextlib.suppress(Exception):
                 stream.close()
+
+
+def _bypass_proxy_for_dashscope() -> None:
+    hosts = ("aliyuncs.com", ".aliyuncs.com", "localhost", "127.0.0.1", "::1")
+    for var in ("NO_PROXY", "no_proxy"):
+        current = [item for item in os.environ.get(var, "").split(",") if item.strip()]
+        for host in hosts:
+            if host not in current:
+                current.append(host)
+        os.environ[var] = ",".join(current)
 
 
 def _with_com(callback):

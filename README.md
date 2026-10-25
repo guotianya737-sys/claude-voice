@@ -63,9 +63,10 @@ run.bat --no-hotkey                   :: 本次不启用全局热键
 |---|---|---|
 | `PTT_HOTKEY` | `"F9"` | 全局按住说话键。支持 `F1..F24` / `SPACE` / 字母数字 / `CTRL` `RCTRL` `ALT` `SHIFT` |
 | `AUDIO_INPUT_DEVICE` | `None` | 系统默认麦克风；填设备序号或名称可固定 |
-| `TTS_PROVIDER` | `"sapi"` | `sapi` 本地 / `siliconflow` / `siliconflow_moss` / `bailian` 云端 |
+| `TTS_PROVIDER` | `"bailian"` | `bailian`=百炼 CosyVoice（云端流式，首音 ~0.6s，自然度最好）/ `sapi`=本地 SAPI（机械但离线即时）/ `siliconflow` 系列 |
 | `SAPI_VOICE` | `""` | 空 = 自动挑中文音色（本机为 `Microsoft Huihui Desktop`） |
 | `SAPI_RATE` | `0` | SAPI 语速，-10..10 |
+| `BAILIAN_INSTRUCTION_ENABLED` | `False` | 情绪指令开关。实测 `cosyvoice-v3-flash` 不接受 instruction（引擎 error 428），打开反而会整句失败回落 SAPI |
 | `PI_EXTRA_ARGS` | `["--no-mcp"]` | 语音优先低延迟；需要 MCP 工具（rea/comfy 等）就删掉这一项 |
 | `PI_MODEL` | `""` | 空 = 用 pi 当前默认模型 |
 | `PI_THINKING` | `"low"` | 首字延迟优先；想要深想可改 `medium` |
@@ -73,8 +74,24 @@ run.bat --no-hotkey                   :: 本次不启用全局热键
 | `PI_RESPONSE_TIMEOUT` | `180` | 单轮上限（秒） |
 | `SERVER_PORT` | `12394` | Web UI 端口 |
 
-云端 TTS：把 `tts_config.example.json` 复制成 `tts_config.local.json` 填 key，
-或用 `SILICONFLOW_API_KEY` / `DASHSCOPE_API_KEY` 环境变量。`response_format` 必须是 **wav**（播放端只解 wav）。
+### 语音（谁在说话）
+
+默认走**百炼 CosyVoice v3-flash / longanli_v3**（云端 WebSocket 流式）。key 的来源优先级：
+
+1. 环境变量 `DASHSCOPE_API_KEY`
+2. `tts_config.local.json` 里的 `bailian.api_key`
+3. **`~/.pi/agent/auth.json` 的 `bailian.key`** —— 直接复用 pi 已有的凭证，不用复制粘贴（只读取使用，不打印）
+
+实测：首音 **0.6s**、整句 1.5s；**开着代理也是 0.6s**，因为 `tts_engine._bypass_proxy_for_dashscope()` 会把 `*.aliyuncs.com` 加进 `NO_PROXY`（不绕过的话 WebSocket 被代理拖到 5.5s）。
+云端连不上（key 失效/断网）时会自动回落 SAPI，代价是白等约 5s 的 WebSocket 超时。
+
+情绪：`config.BAILIAN_EMOTION_INSTRUCTIONS` 有 7 种语气，但当前可用模型全部拒绝 instruction
+（v3-flash → 428，v3-plus → 418 音色不匹配，qwen-tts/qwen3-tts-flash → 本账号 ModelNotFound），
+所以 `BAILIAN_INSTRUCTION_ENABLED=False`，情绪标签会被忽略而不是失败。
+想要"撒娇/哽咽/笑"，得上本地模型（IndexTTS2 之类），见下。
+
+硅基流动另配：把 `tts_config.example.json` 复制成 `tts_config.local.json` 填 key，
+或用 `SILICONFLOW_API_KEY`。`response_format` 必须是 **wav**（播放端只解 wav）。
 
 免提模式（不需要按键）：`pip install torch silero-vad`，然后在网页上切到「免提模式」。
 

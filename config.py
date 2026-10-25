@@ -158,8 +158,10 @@ ASR_NUM_THREADS = 4
 # ---------------------------------------------------------------------------
 # TTS
 # ---------------------------------------------------------------------------
-# sapi = Windows 本地 SAPI（离线即时）；siliconflow / siliconflow_moss / bailian = 云端
-TTS_PROVIDER = "sapi"
+# bailian = 百炼 CosyVoice（云端流式，自然度最好，首音 ~0.6s；断网自动回落 SAPI）
+# sapi = Windows 本地 SAPI（离线、即时，但机械）
+# siliconflow / siliconflow_moss = 硅基流动（需自己的 key）
+TTS_PROVIDER = "bailian"
 
 # SAPI 音色。留空 = 自动挑第一个中文音色；也可以是 "Microsoft Huihui Desktop" 等完整名。
 SAPI_VOICE = ""
@@ -198,6 +200,9 @@ BAILIAN_SPEECH_RATE = 1.0
 BAILIAN_VOLUME = 50
 BAILIAN_PITCH_RATE = 1.0
 BAILIAN_INSTRUCTION = ""
+# 情绪指令（"用撒娇的语气说"）实测在 cosyvoice-v3-flash 上被引擎拒绝（error 428），
+# 只有换成支持 instruct 的模型/音色才打开；关闭时情绪标签会被忽略而不是报错降级。
+BAILIAN_INSTRUCTION_ENABLED = False
 BAILIAN_EMOTION_INSTRUCTIONS = {
     "angry": "你现在很生气，声音带着明显的怒意，语气严厉强势，说话节奏加快。",
     "sad": "你现在有点低落和难过，声音微微发颤，语气带着淡淡的忧伤，说话缓慢。",
