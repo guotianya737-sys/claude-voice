@@ -22,11 +22,26 @@ Windows 上的语音 I/O 前端，把 [claude-voice](https://github.com/guotiany
 
 ## 快速开始
 
+**后台常驻（推荐，关掉终端也不停）：**
+
 ```bat
-run.bat            :: 首次会自动建 .venv、装依赖、下模型（~230MB）
+voiceon          :: 启动（已在跑就只报状态并打开页面）
+voicestatus      :: 看 PID / 端口 / 日志尾巴
+voiceoff         :: 停止
+voiceoff --force :: pid 文件丢了、或端口被别人占着时强杀端口持有者
 ```
 
-然后浏览器打开 <http://localhost:12394/>。
+三条命令装在 `%USERPROFILE%\bin`（已在 PATH，cmd 和 PowerShell 通用），
+实现在 `ctl.py`；PowerShell 里还会顺带设置会话级环境变量 `PI_VOICE_ON=1` / `PI_VOICE_URL`（`voiceoff` 时清掉），脚本可以用它判断在不在跑。
+
+**前台调试（看得到实时日志，Ctrl+C 停）：**
+
+```bat
+run.bat
+```
+
+首次运行会自动建 `.venv`、装依赖、下模型（~230MB，几秒到几分钟看网速）。
+启动后浏览器打开 <http://localhost:12394/>。
 
 **按住 `F9` 说话，松开发送。** 说话途中按住 `F9` 可以打断当前朗读，打断后完整收音再提交。
 不想用热键就点网页上的「按住说话」，或者用输入框直接打字。
@@ -90,6 +105,10 @@ pi-voice/
 4. **TTS 预处理任务异常会静默死锁**：producer 挂了没人叫醒消费者，整轮对话会一直挂着。已加 done-callback 上报 + 投喂 `None`。
 5. **`.bat` 必须纯 ASCII + CRLF**，中文会直接写成乱码字节。
 6. SAPI 合成的 wav 是 22050Hz/16bit/单声道，播放端按 wav 头自适应，不要写死采样率。
+7. **开代理时 localhost 也会被代理**：`Invoke-WebRequest http://localhost:...` 走代理会返回 503，就绪探测必须用裸 TCP 连接（`Net.Sockets.TcpClient`），否则 voiceon 会假死等两分钟。
+8. **`.bat` 里别用裸 `find`/`tasklist`**：git-bash 的 GNU `find` 会盖掉系统 `find.exe`，一律写 `%SystemRoot%\System32\xxx.exe`。
+9. **venv 的 `python.exe` 是转发器**：它 spawn 一个 base python 做真正的活儿，所以端口持有者 PID ≠ 启动时拿到的 PID；杀进程必须 `/T` 杀整棵树，判断"是不是我们的进程"要连父进程命令行一起看。
+10. **PowerShell 5.1 两个坑**：profile 里写中文注释必须存成 **UTF-8 with BOM**（否则按 cp936 解码直接语法错，连带 `proxy` 都失效）；没有 `??` 运算符。
 
 ## License
 
