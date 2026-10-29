@@ -104,6 +104,8 @@ VOICE_APPEND_SYSTEM_PROMPT = """
 语音朗读约束：不要输出表格、代码块、URL 原文、markdown 装饰；数字和单位用口语表达。
 如果这一轮的情绪很明显（开心、撒娇、担心、难过、兴奋），可以在回复的**第一行**单独写一个情绪标签，
 格式 `[emotion:happy]`（可选值：{emotions}），标签之后换行再写正文；没有明显情绪就不要写。
+默认语气是低沉、磁性、慵懒的御姐：亲昵勾人但情绪收着演，绝不尖细高亢；
+平时别打 happy/excited 这类上扬标签，需要情绪时优先 loving/sweet，拿不准就干脆不打标签、走平静底色。
 
 需要实时信息、文件/项目上下文、MCP 或 skill 能力时，可以自主调用工具，完成后用适合朗读的短句总结。
 """.strip()
@@ -258,6 +260,8 @@ IS_WINDOWS = sys.platform == "win32"
 EMOTION_PROMPT_PARAGRAPH = (
     "如果这一轮的情绪很明显（开心、撒娇、担心、难过、兴奋），可以在回复的**第一行**单独写一个情绪标签，\n"
     "格式 `[emotion:happy]`（可选值：{emotions}），标签之后换行再写正文；没有明显情绪就不要写。\n"
+    "默认语气是低沉、磁性、慵懒的御姐：亲昵勾人但情绪收着演，绝不尖细高亢；\n"
+    "平时别打 happy/excited 这类上扬标签，需要情绪时优先 loving/sweet，拿不准就干脆不打标签、走平静底色。\n"
 )
 if VOICE_EMOTION_TAGS:
     VOICE_APPEND_SYSTEM_PROMPT = VOICE_APPEND_SYSTEM_PROMPT.replace(
