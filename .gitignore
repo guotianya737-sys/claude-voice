@@ -2,9 +2,9 @@ __pycache__/
 *.py[cod]
 .venv/
 *.log
-tts_config.local.json
 uv.lock
 models/
 sessions/
 *.part
 samples/
+transcript.txt

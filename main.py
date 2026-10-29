@@ -233,16 +233,6 @@ class StreamingReplySpeaker:
             else:
                 max_chars = config.INDEXTTS_FIRST_CHUNK_MAX_CHARS
                 min_chars = config.INDEXTTS_FIRST_CHUNK_MIN_CHARS
-        elif self.app.tts.provider == "bailian":
-            if self.app.tts.can_prefetch():
-                max_chars = config.BAILIAN_PREFETCH_TTS_CHUNK_MAX_CHARS
-                min_chars = config.BAILIAN_PREFETCH_TTS_CHUNK_MIN_CHARS
-            else:
-                max_chars = config.BAILIAN_TTS_CHUNK_MAX_CHARS
-                min_chars = config.BAILIAN_TTS_CHUNK_MIN_CHARS
-        elif self.app.tts.provider in {"siliconflow", "siliconflow_moss"}:
-            max_chars = config.SILICONFLOW_TTS_CHUNK_MAX_CHARS
-            min_chars = config.SILICONFLOW_TTS_CHUNK_MIN_CHARS
         else:
             max_chars = config.TTS_CHUNK_MAX_CHARS
             min_chars = config.TTS_CHUNK_MIN_CHARS
@@ -913,11 +903,9 @@ class MiruVoiceApp:
 
     def _tts_detail(self) -> str:
         if self.tts.provider == "indextts":
-            state = "已连接" if self.tts.indextts.available() else "未连上（会回落云端/SAPI）"
+            state = "已连接" if self.tts.indextts.available() else "未连上（会回落本地 SAPI）"
             return f"（本地 IndexTTS @ {config.INDEXTTS_URL}，{state}）"
-        if self.tts.provider == "sapi":
-            return f"（{self.tts.sapi.voice or '自动选音色'}）"
-        return f"（{self.tts.bailian.model}/{self.tts.bailian.voice}）"
+        return f"（{self.tts.sapi.voice or '自动选音色'}）"
 
     async def ptt_press(self) -> None:
         if self.mode == Mode.HANDSFREE:

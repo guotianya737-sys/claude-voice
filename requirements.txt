@@ -1,4 +1,4 @@
-# 按键说话（PTT）必需依赖
+# 按键说话（PTT）必需依赖（TTS/ASR 全本地，不需要任何云端 key）
 aiohttp>=3.9
 numpy>=1.24
 sounddevice>=0.5
@@ -7,6 +7,3 @@ pywin32>=306          # Windows SAPI 本地 TTS（缺失时自动回退 PowerShe
 
 # 免提常听模式（--mode handsfree）才需要；按键说话用不到
 silero-vad>=6.0
-
-# 云端 TTS（默认就用百炼 CosyVoice，必需；缺 key 或断网会自动回落 SAPI）
-dashscope>=1.24

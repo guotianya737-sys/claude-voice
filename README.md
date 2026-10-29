@@ -47,7 +47,7 @@ voiceoff --force      :: pid 丢了或端口被别人占着时强杀
    如果你换了更小声的麦克风还是不行，把 `DB_THRESHOLD` 往下调，或保持只信概率。
 2. 看 `voicestatus` 的日志尾巴：出现 `[turn] 收到一段 …` 说明 VAD 收到了；
    出现 `[asr] '…'` 说明识别到了；`[play] 开始朗读 / 朗读结束` 说明确实放了。
-3. 一轮要 **15–20 秒**（pi 思考 ~10s + 本地 TTS RTF≈0.85）。嫌慢就把 `TTS_PROVIDER` 换成 `"bailian"`（首音 0.6s）。
+3. 一轮要 **15–20 秒**（pi 思考 ~10s + 本地 TTS RTF≈0.85）。嫌慢先看 `[indextts] …字 …s` 那行，确认是 TTS 在等而不是 pi 在等。
 
 三条命令装在 `%USERPROFILE%\bin`（已在 PATH，cmd 和 PowerShell 通用），
 实现在 `ctl.py`；PowerShell 里还会顺带设置会话级环境变量 `PI_VOICE_ON=1` / `PI_VOICE_URL`（`voiceoff` 时清掉），脚本可以用它判断在不在跑。
@@ -82,10 +82,9 @@ run.bat --miccheck 5                  :: 录 5 秒，报告音量/VAD 概率（�
 |---|---|---|
 | `PTT_HOTKEY` | `"F9"` | 全局按住说话键。支持 `F1..F24` / `SPACE` / 字母数字 / `CTRL` `RCTRL` `ALT` `SHIFT` |
 | `AUDIO_INPUT_DEVICE` | `None` | 系统默认麦克风；填设备序号或名称可固定 |
-| `TTS_PROVIDER` | `"bailian"` | `bailian`=百炼 CosyVoice（云端流式，首音 ~0.6s，自然度最好）/ `sapi`=本地 SAPI（机械但离线即时）/ `siliconflow` 系列 |
+| `TTS_PROVIDER` | `"indextts"` | `indextts`=本地 IndexTTS（能演情绪+克隆音色）/ `sapi`=本地 SAPI（机械但离线即时，兜底） |
 | `SAPI_VOICE` | `""` | 空 = 自动挑中文音色（本机为 `Microsoft Huihui Desktop`） |
 | `SAPI_RATE` | `0` | SAPI 语速，-10..10 |
-| `BAILIAN_INSTRUCTION_ENABLED` | `False` | 情绪指令开关。实测 `cosyvoice-v3-flash` 不接受 instruction（引擎 error 428），打开反而会整句失败回落 SAPI |
 | `PI_EXTRA_ARGS` | `["--no-mcp"]` | 语音优先低延迟；需要 MCP 工具（rea/comfy 等）就删掉这一项 |
 | `PI_MODEL` | `""` | 空 = 用 pi 当前默认模型 |
 | `PI_THINKING` | `"low"` | 首字延迟优先；想要深想可改 `medium` |
@@ -105,10 +104,10 @@ voiceoff   → 两个一起停
 
 实测（RX 9070 XT / ROCm）：**RTF ≈ 0.85–1.0**（5 秒音频约 4.5–5 秒生成），
 每个请求另有 ~2.5s 固定开销，所以**首音 ≈ 2.5s + 0.85×时长**；45 字回复约 7.4s 生成 8.5s 音频。
-代价是比云端慢，收益是情感和音色克隆。想换回快的：`TTS_PROVIDER="bailian"`（首音 0.6s）。
+收益是情感和音色克隆，代价是首音慢——**全本地、不要任何云端 key** 是有意为之。
 
-音色参考是 `~/index-tts/voices/miru_ref_cosyvoice.wav`（用云端 longanli_v3 生成的一段中性御姐音），
-换声音只要换这个文件并重启服务。
+音色参考是 `~/index-tts/voices/miru_ref.wav`（一段中性御姐音，基频 ~187Hz），
+换声音只要换这个文件并重启服务；同一个参考音 + 常驻模型 = 每次出声音色一致，不会漂。
 
 **分档策略**：`INDEXTTS_SINGLE_REQUEST=True` 整段一次合成（连续无接缝）。
 本地 RTF≈1 时切成多段反而会出现静音缝（生成第 2 段时第 1 段已播完），所以默认不开分段。
@@ -116,27 +115,11 @@ voiceoff   → 两个一起停
 **情绪**：模型回复首行写 `[emotion:teasing]` 这类标签，映射到 IndexTTS 的 8 维情绪向量
 （happy / excited / teasing / loving / worried / sad / angry）。
 
-**回退链**：`indextts → bailian → sapi`（`config.TTS_FALLBACK_CHAIN`）。
-本地服务没起来就自动走云端，云端也不通就退回系统语音。
+**回退链**：`indextts → sapi`（`config.TTS_FALLBACK_CHAIN`）。
+本地 TTS 服务没起来就退回 Windows 自带语音，整条链路都不出网。
 
-### 云端语音（百炼 CosyVoice）
-
-默认走**百炼 CosyVoice v3-flash / longanli_v3**（云端 WebSocket 流式）。key 的来源优先级：
-
-1. 环境变量 `DASHSCOPE_API_KEY`
-2. `tts_config.local.json` 里的 `bailian.api_key`
-3. **`~/.pi/agent/auth.json` 的 `bailian.key`** —— 直接复用 pi 已有的凭证，不用复制粘贴（只读取使用，不打印）
-
-实测：首音 **0.6s**、整句 1.5s；**开着代理也是 0.6s**，因为 `tts_engine._bypass_proxy_for_dashscope()` 会把 `*.aliyuncs.com` 加进 `NO_PROXY`（不绕过的话 WebSocket 被代理拖到 5.5s）。
-云端连不上（key 失效/断网）时会自动回落 SAPI，代价是白等约 5s 的 WebSocket 超时。
-
-情绪：`config.BAILIAN_EMOTION_INSTRUCTIONS` 有 7 种语气，但当前可用模型全部拒绝 instruction
-（v3-flash → 428，v3-plus → 418 音色不匹配，qwen-tts/qwen3-tts-flash → 本账号 ModelNotFound），
-所以 `BAILIAN_INSTRUCTION_ENABLED=False`，情绪标签会被忽略而不是失败。
-想要"撒娇/哽咽/笑"，得上本地模型（IndexTTS2 之类），见下。
-
-硅基流动另配：把 `tts_config.example.json` 复制成 `tts_config.local.json` 填 key，
-或用 `SILICONFLOW_API_KEY`。`response_format` 必须是 **wav**（播放端只解 wav）。
+> 早期版本接过云端 TTS（百炼 CosyVoice / 硅基流动），现在已整体移除：
+> 这套东西的定位是**纯本地**，不需要任何云端 key，也不受断网和代理影响。
 
 免提模式（不需要按键）：`pip install torch silero-vad`，然后在网页上切到「免提模式」。
 
@@ -146,7 +129,7 @@ voiceoff   → 两个一起停
 pi-voice/
 ├── main.py          # 编排：按键/免提、ASR→pi→TTS、打断、自检
 ├── pi_client.py     # pi 子进程 RPC 客户端（常驻读线程 + asyncio 队列）
-├── tts_engine.py    # SAPI（pywin32/PowerShell）+ 硅基流动 + 百炼；sounddevice 播放
+├── tts_engine.py    # 本地 IndexTTS（HTTP）+ 本地 SAPI（pywin32/PowerShell）；sounddevice 播放
 ├── asr_engine.py    # sherpa-onnx SenseVoice int8
 ├── models.py        # ASR 模型下载（hf-mirror 优先）
 ├── vad.py           # Silero VAD（懒加载，免提才用）
